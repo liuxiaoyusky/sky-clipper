@@ -47,7 +47,11 @@ export interface ScheduledCapture {
 
 export interface NavigationCaptureScheduler {
   begin(locationHref: string, domIdentity: string, runKey: string): ScheduledCapture;
-  restart(locationHref: string, domIdentity: string, runKey: string): ScheduledCapture;
+  restart(
+    locationHref: string,
+    domIdentity: string,
+    runKey: string,
+  ): ScheduledCapture | undefined;
   sync(locationHref: string, domIdentity: string, runKey: string): ScheduledCapture | undefined;
   isCurrent(generation: number, runKey: string): boolean;
 }
@@ -81,6 +85,13 @@ export function createNavigationCaptureScheduler(): NavigationCaptureScheduler {
       return start(runKey);
     },
     restart(locationHref, domIdentity, runKey) {
+      if (waitingForIdentityChange && locationHref === previousLocation) {
+        runs.invalidate();
+        if (domIdentity === previousIdentity) return undefined;
+        previousIdentity = domIdentity;
+        waitingForIdentityChange = false;
+        return start(runKey);
+      }
       previousLocation = locationHref;
       previousIdentity = domIdentity;
       waitingForIdentityChange = false;
@@ -107,6 +118,7 @@ export function createNavigationCaptureScheduler(): NavigationCaptureScheduler {
         previousIdentity = domIdentity;
         return start(runKey);
       }
+      previousIdentity = domIdentity;
       return undefined;
     },
     isCurrent(generation, runKey) {

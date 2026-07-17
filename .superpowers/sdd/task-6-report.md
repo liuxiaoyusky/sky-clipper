@@ -245,3 +245,56 @@ extraction, submission, and result-application guards remain in place. The remai
 boundary is a real BofA SPA transition in Chrome: synthetic scheduler tests prove the ordering, but
 they do not exercise the target site's rendering timing. The 250 ms watcher is bounded transient
 work and provides a fallback for main-world history mutations.
+
+## Review 4 follow-up: identity baseline and settings race — RED -> GREEN
+
+### RED
+
+Added two scheduler regressions before implementation:
+
+- a same-location/same-run synchronization changes the old document identity, then a query-only
+  navigation with that still-old identity must remain pending rather than start a capture;
+- a settings restart during that pending navigation must invalidate old work but keep waiting until
+  the new document identity appears.
+
+```sh
+npm test -- tests/research/observe.test.ts
+```
+
+Result: FAIL as expected — the old scheduler retained a stale identity baseline and `restart()`
+cleared its pending wait and returned a new capture.
+
+### GREEN
+
+- Stable same-location/same-run synchronization now refreshes `previousIdentity` without creating
+  another generation. A later navigation therefore compares against the actual last old DOM.
+- A settings restart while navigation is pending invalidates the current generation and returns no
+  capture while its identity is unchanged. If the new identity is already visible it starts at once;
+  otherwise the existing identity synchronization starts exactly one generation after it appears.
+  The content script now handles the intentionally optional capture result.
+
+Final verification:
+
+```sh
+npm test -- tests/research/capture-service.test.ts tests/research/observe.test.ts tests/research/status.test.ts tests/research/archive-writer.test.ts tests/research/chrome-archive-io.test.ts
+# PASS: 5 files, 31 tests
+npm test
+# PASS: 12 files, 72 tests
+npm run compile
+# PASS
+npm run build
+# PASS
+git diff --check
+# PASS
+```
+
+The built manifest still declares the sole BofA content-script match
+`https://rsch.baml.com/*`; the generated content script ASCII scan returned no matches (expected
+non-match exit status).
+
+## Review 4 self-review
+
+This follow-up changes only scheduler state transitions, the settings-change call site, and their
+regressions. It retains the existing transient-only location comparison and does not add storage,
+keys, logs, queues, browser control, or tab closing. Synthetic tests cover the scheduler ordering;
+a real BofA SPA/settings-toggle timing sequence remains the manual-browser verification boundary.

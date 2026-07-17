@@ -149,7 +149,8 @@ export default defineContentScript({
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local' || !changes[RESEARCH_SETTINGS_KEY]) return;
-      startCapture(scheduler.restart(location.href, readDomIdentity(), readRunKey()));
+      const capture = scheduler.restart(location.href, readDomIdentity(), readRunKey());
+      if (capture) startCapture(capture);
     });
 
     let identityCheckTimer: number | undefined;

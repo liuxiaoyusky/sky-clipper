@@ -101,4 +101,40 @@ describe('page observation', () => {
     expect(scheduler.isCurrent(first.generation, first.runKey)).toBe(false);
     expect(recapture).toMatchObject({ runKey: nextKey });
   });
+
+  it('refreshes the stable identity baseline without starting another capture', () => {
+    const scheduler = createNavigationCaptureScheduler();
+    const firstUrl = 'https://rsch.baml.com/r?q=first-report';
+    const nextUrl = 'https://rsch.baml.com/r?q=second-report';
+    const firstKey = bofaRunKey(firstUrl, 'BOFA-1');
+    const firstIdentity = bofaDomIdentity(firstUrl, ready);
+    const updatedOldIdentity = bofaDomIdentity(firstUrl, {
+      ...ready,
+      bodyTextLength: 600,
+    });
+
+    const first = scheduler.begin(firstUrl, firstIdentity, firstKey);
+    expect(scheduler.sync(firstUrl, updatedOldIdentity, firstKey)).toBeUndefined();
+    expect(scheduler.isCurrent(first.generation, first.runKey)).toBe(true);
+    expect(scheduler.sync(nextUrl, updatedOldIdentity, firstKey)).toBeUndefined();
+    expect(scheduler.isCurrent(first.generation, first.runKey)).toBe(false);
+  });
+
+  it('keeps a settings restart pending until the new DOM identity appears', () => {
+    const scheduler = createNavigationCaptureScheduler();
+    const firstUrl = 'https://rsch.baml.com/r?q=first-report';
+    const nextUrl = 'https://rsch.baml.com/r?q=second-report';
+    const firstKey = bofaRunKey(firstUrl, 'BOFA-1');
+    const firstIdentity = bofaDomIdentity(firstUrl, ready);
+    const first = scheduler.begin(firstUrl, firstIdentity, firstKey);
+
+    expect(scheduler.sync(nextUrl, firstIdentity, firstKey)).toBeUndefined();
+    expect(scheduler.restart(nextUrl, firstIdentity, firstKey)).toBeUndefined();
+    expect(scheduler.isCurrent(first.generation, first.runKey)).toBe(false);
+    expect(scheduler.sync(nextUrl, firstIdentity, firstKey)).toBeUndefined();
+
+    const nextIdentity = bofaDomIdentity(nextUrl, { ...ready, sourceId: 'BOFA-2' });
+    const nextKey = bofaRunKey(nextUrl, 'BOFA-2');
+    expect(scheduler.sync(nextUrl, nextIdentity, nextKey)).toMatchObject({ runKey: nextKey });
+  });
 });
