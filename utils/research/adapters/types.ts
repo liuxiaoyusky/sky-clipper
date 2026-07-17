@@ -20,6 +20,7 @@ export interface ResearchSiteAdapter {
 function evidenceSignature(evidence: ReadinessEvidence): string {
   return JSON.stringify([
     evidence.kind,
+    evidence.pdfState,
     evidence.sourceId,
     evidence.title,
     evidence.bodyTextLength,
@@ -37,6 +38,7 @@ export class StableReadinessTracker {
   observe(evidence: ReadinessEvidence): boolean {
     if (
       evidence.kind !== 'report-html' ||
+      evidence.pdfState === 'pending' ||
       !evidence.sourceId ||
       !evidence.title ||
       evidence.bodyTextLength < 200

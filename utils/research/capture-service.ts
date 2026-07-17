@@ -38,18 +38,36 @@ export function createCaptureStartupRecovery(dependencies: {
   settle(): Promise<void>;
   sweep(): Promise<void>;
 }): CaptureStartupRecovery {
-  const ready = (async () => {
-    const state = await dependencies.session.get(ACTIVE_CAPTURE_LEASE_KEY);
-    await dependencies.settle();
-    await dependencies.sweep();
-    if (state[ACTIVE_CAPTURE_LEASE_KEY] !== undefined) {
-      await dependencies.session.remove(ACTIVE_CAPTURE_LEASE_KEY);
-    }
-  })();
-  void ready.catch(() => {});
+  let recovered = false;
+  let inFlight: Promise<void> | undefined;
+
+  const ready = (): Promise<void> => {
+    if (recovered) return Promise.resolve();
+    if (inFlight) return inFlight;
+    const attempt = (async () => {
+      await dependencies.settle();
+      await dependencies.sweep();
+      const state = await dependencies.session.get(ACTIVE_CAPTURE_LEASE_KEY);
+      if (state[ACTIVE_CAPTURE_LEASE_KEY] !== undefined) {
+        await dependencies.session.remove(ACTIVE_CAPTURE_LEASE_KEY);
+      }
+      recovered = true;
+    })();
+    inFlight = attempt;
+    void attempt.then(
+      () => {
+        if (inFlight === attempt) inFlight = undefined;
+      },
+      () => {
+        if (inFlight === attempt) inFlight = undefined;
+      },
+    );
+    return attempt;
+  };
+  void ready().catch(() => {});
 
   return {
-    ready: () => ready,
+    ready,
     lease: {
       async acquire() {
         await dependencies.session.set({

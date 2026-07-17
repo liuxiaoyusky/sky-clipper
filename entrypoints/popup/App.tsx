@@ -48,18 +48,19 @@ export function App() {
 
   useEffect(() => {
     let active = true;
+    let queue: SettingsSaveQueue | undefined;
+    let unsubscribe: (() => void) | undefined;
     void loadResearchSettings()
       .then((initial) => {
         if (!active) return;
-        const queue = createSettingsSaveQueue(initial, saveResearchSettings);
+        queue = createSettingsSaveQueue(initial, saveResearchSettings);
         queueRef.current = queue;
         setSettingsState(queue.getState());
         setSettingsReady(true);
         setSettingsLoading(false);
-        const unsubscribe = queue.subscribe((next) => {
+        unsubscribe = queue.subscribe((next) => {
           if (active) setSettingsState(next);
         });
-        return unsubscribe;
       })
       .catch(() => {
         if (!active) return;
@@ -72,6 +73,8 @@ export function App() {
       });
     return () => {
       active = false;
+      unsubscribe?.();
+      if (queueRef.current === queue) queueRef.current = undefined;
     };
   }, []);
 

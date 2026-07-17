@@ -149,9 +149,41 @@ describe('BofA adapter', () => {
   it('requires three identical ready observations', () => {
     const tracker = new StableReadinessTracker(3);
     const evidence = bofaAdapter.readinessEvidence(document, new URL(privateUrl));
+    expect(evidence.pdfState).toBe('available');
     expect(tracker.observe(evidence)).toBe(false);
     expect(tracker.observe(evidence)).toBe(false);
     expect(tracker.observe(evidence)).toBe(true);
+  });
+
+  it('distinguishes available, pending, and confirmed-absent PDF evidence', () => {
+    const url = new URL(privateUrl);
+    expect(bofaAdapter.readinessEvidence(document, url).pdfState).toBe('available');
+
+    const readyStateDescriptor = Object.getOwnPropertyDescriptor(document, 'readyState');
+    try {
+      Object.defineProperty(document, 'readyState', {
+        configurable: true,
+        value: 'loading',
+      });
+      expect(bofaAdapter.readinessEvidence(document, url).pdfState).toBe('pending');
+    } finally {
+      if (readyStateDescriptor) {
+        Object.defineProperty(document, 'readyState', readyStateDescriptor);
+      } else {
+        Reflect.deleteProperty(document, 'readyState');
+      }
+    }
+
+    const pdfControl = document.querySelector<HTMLAnchorElement>(
+      'a#print_pdf_anchor[title="PDF"]',
+    );
+    if (!pdfControl) throw new Error('Fixture PDF control is unavailable');
+    pdfControl.href = 'https://example.com/not-approved.pdf';
+    expect(bofaAdapter.readinessEvidence(document, url).pdfState).toBe('pending');
+
+    pdfControl.remove();
+    expect(document.readyState).toBe('complete');
+    expect(bofaAdapter.readinessEvidence(document, url).pdfState).toBe('absent-confirmed');
   });
 
   it('resets readiness when equal-length text changes in the body middle', () => {

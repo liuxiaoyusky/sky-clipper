@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createCaptureService,
   createCaptureStartupRecovery,
@@ -175,10 +175,10 @@ describe('capture service', () => {
     await sweepStarted;
     const result = service.submit(submission('BOFA-1', 'a'));
     await Promise.resolve();
-    expect(events).toEqual(['get', 'settle', 'sweep']);
+    expect(events).toEqual(['settle', 'sweep']);
     releaseSweep();
     await expect(result).resolves.toMatchObject({ status: 'saved' });
-    expect(events).toEqual(['get', 'settle', 'sweep', 'remove', 'set', 'write', 'remove']);
+    expect(events).toEqual(['settle', 'sweep', 'get', 'remove', 'set', 'write', 'remove']);
   });
 
   it('returns a redacted recovery failure without starting archive IO', async () => {
@@ -219,5 +219,67 @@ describe('capture service', () => {
       expect(result.reason).not.toContain('rsch.baml.com');
     }
     expect(ioCreated).toBe(false);
+  });
+
+  it('retries the full recovery after a transient failure and then sweeps', async () => {
+    const settle = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('transient startup failure'))
+      .mockResolvedValueOnce(undefined);
+    const sweep = vi.fn(async () => undefined);
+    const get = vi.fn(async () => ({}));
+    const recovery = createCaptureStartupRecovery({
+      session: {
+        get,
+        async set() {},
+        async remove() {},
+      },
+      settle,
+      sweep,
+    });
+
+    await expect(recovery.ready()).rejects.toThrow('transient startup failure');
+    await expect(recovery.ready()).resolves.toBeUndefined();
+
+    expect(settle).toHaveBeenCalledTimes(2);
+    expect(sweep).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it('shares one in-flight recovery attempt across concurrent callers', async () => {
+    let releaseSettle!: () => void;
+    let markSettleStarted!: () => void;
+    const settleBlocked = new Promise<void>((resolve) => {
+      releaseSettle = resolve;
+    });
+    const settleStarted = new Promise<void>((resolve) => {
+      markSettleStarted = resolve;
+    });
+    const settle = vi.fn(async () => {
+      markSettleStarted();
+      await settleBlocked;
+    });
+    const sweep = vi.fn(async () => undefined);
+    const recovery = createCaptureStartupRecovery({
+      session: {
+        async get() {
+          return {};
+        },
+        async set() {},
+        async remove() {},
+      },
+      settle,
+      sweep,
+    });
+
+    await settleStarted;
+    const first = recovery.ready();
+    const second = recovery.ready();
+    expect(first).toBe(second);
+    expect(settle).toHaveBeenCalledTimes(1);
+
+    releaseSettle();
+    await Promise.all([first, second]);
+    expect(sweep).toHaveBeenCalledTimes(1);
   });
 });

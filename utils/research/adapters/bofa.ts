@@ -6,6 +6,7 @@ import { canonicalizeBofaUrl, sanitizeTextContent } from '../privacy';
 
 const REPORT_PATHS = new Set(['/r', '/report']);
 const BODY_SELECTOR = '[id$="_Body"]';
+const PDF_SELECTOR = 'a#print_pdf_anchor[title="PDF"]';
 const AUTH_TEXT = ['access denied', 'too many requests', 'verify you are human', 'captcha'];
 const MAX_EVIDENCE_TEXT_LENGTH = 256;
 
@@ -57,9 +58,7 @@ function getSourceId(document: Document): string | null {
 }
 
 function findOriginalPdf(document: Document): string | null {
-  const href = document
-    .querySelector<HTMLAnchorElement>('a#print_pdf_anchor[title="PDF"]')
-    ?.href?.trim();
+  const href = document.querySelector<HTMLAnchorElement>(PDF_SELECTOR)?.href?.trim();
   if (!href) return null;
   try {
     const url = new URL(href);
@@ -67,6 +66,12 @@ function findOriginalPdf(document: Document): string | null {
   } catch {
     return null;
   }
+}
+
+function pdfReadinessState(document: Document): ReadinessEvidence['pdfState'] {
+  if (document.readyState !== 'complete') return 'pending';
+  if (findOriginalPdf(document)) return 'available';
+  return document.querySelector(PDF_SELECTOR) ? 'pending' : 'absent-confirmed';
 }
 
 function reportBody(document: Document): HTMLElement {
@@ -87,6 +92,7 @@ export const bofaAdapter: ResearchSiteAdapter = {
     const normalized = body?.textContent?.replace(/\s+/g, ' ').trim() || '';
     return {
       kind: classifyBofaPage(document, url),
+      pdfState: pdfReadinessState(document),
       sourceId: getSourceId(document)?.slice(0, MAX_EVIDENCE_TEXT_LENGTH) || undefined,
       title: inputValue(document, 'reportTitle')?.slice(0, MAX_EVIDENCE_TEXT_LENGTH),
       bodyTextLength: normalized.length,

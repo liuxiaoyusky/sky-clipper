@@ -37,6 +37,7 @@ export interface CaptureSubmission {
 
 export interface ReadinessEvidence {
   kind: PageKind;
+  pdfState: 'available' | 'absent-confirmed' | 'pending';
   sourceId?: string;
   title?: string;
   bodyTextLength: number;

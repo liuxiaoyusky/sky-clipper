@@ -10,6 +10,7 @@ import type { ReadinessEvidence } from '@/utils/research/types';
 
 const ready: ReadinessEvidence = {
   kind: 'report-html',
+  pdfState: 'available',
   sourceId: 'BOFA-1',
   title: 'Report',
   bodyTextLength: 500,
@@ -32,6 +33,68 @@ describe('page observation', () => {
       }),
     ).resolves.toBe('ready');
     expect(probes).toBe(3);
+  });
+
+  it('waits for three stable PDF-available probes after a late PDF control arrives', async () => {
+    let probes = 0;
+    await expect(
+      waitForStablePage({
+        probe: () => {
+          probes += 1;
+          return {
+            ...ready,
+            pdfState: probes <= 3 ? 'absent-confirmed' : 'available',
+          };
+        },
+        sleep: async () => {},
+        shouldContinue: () => true,
+        maxAttempts: 8,
+      }),
+    ).resolves.toBe('ready');
+    expect(probes).toBe(6);
+  });
+
+  it('accepts stable confirmed-absent HTML only on the final configured probe', async () => {
+    let probes = 0;
+    let sleeps = 0;
+    await expect(
+      waitForStablePage({
+        probe: () => {
+          probes += 1;
+          return { ...ready, pdfState: 'absent-confirmed' };
+        },
+        sleep: async () => {
+          sleeps += 1;
+        },
+        shouldContinue: () => true,
+        maxAttempts: 5,
+      }),
+    ).resolves.toBe('ready');
+    expect(probes).toBe(5);
+    expect(sleeps).toBe(4);
+  });
+
+  it('never accepts pending PDF evidence', async () => {
+    let probes = 0;
+    await expect(
+      waitForStablePage({
+        probe: () => {
+          probes += 1;
+          return { ...ready, pdfState: 'pending' };
+        },
+        sleep: async () => {},
+        shouldContinue: () => true,
+        maxAttempts: 5,
+      }),
+    ).resolves.toBe('timeout');
+    expect(probes).toBe(5);
+  });
+
+  it('includes PDF readiness in the BofA DOM identity', () => {
+    const rawUrl = 'https://rsch.baml.com/r?q=fake-report';
+    expect(bofaDomIdentity(rawUrl, ready)).not.toBe(
+      bofaDomIdentity(rawUrl, { ...ready, pdfState: 'absent-confirmed' }),
+    );
   });
 
   it('stops immediately on auth evidence', async () => {

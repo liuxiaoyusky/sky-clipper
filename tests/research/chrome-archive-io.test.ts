@@ -154,6 +154,26 @@ describe('Chrome archive downloads', () => {
     expect(sleeps).toBe(1);
   });
 
+  it('waits past twenty active polls by default until downloads actually settle', async () => {
+    let polls = 0;
+    let sleeps = 0;
+
+    await waitForArchiveDownloadsToSettle({
+      downloads: {
+        async search() {
+          polls += 1;
+          return polls <= 21 ? [{ id: 9, state: 'in_progress' }] : [];
+        },
+      },
+      sleep: async () => {
+        sleeps += 1;
+      },
+    });
+
+    expect(polls).toBe(22);
+    expect(sleeps).toBe(21);
+  });
+
   it('keeps recovery blocked when archive downloads do not settle in time', async () => {
     await expect(
       waitForArchiveDownloadsToSettle({

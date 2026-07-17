@@ -63,7 +63,7 @@ export function bofaDomIdentity(rawUrl: string, evidence: ReadinessEvidence): st
   const fingerprint = /^fnv1a64:[0-9a-f]{16}$/.test(evidence.tailText)
     ? evidence.tailText
     : '';
-  return `${sourceId}|${evidence.bodyTextLength}|${evidence.tableCount}|${fingerprint}`;
+  return `${sourceId}|${evidence.pdfState}|${evidence.bodyTextLength}|${evidence.tableCount}|${fingerprint}`;
 }
 
 export function createNavigationCaptureScheduler(): NavigationCaptureScheduler {
@@ -137,7 +137,12 @@ export async function waitForStablePage(
     if (!options.shouldContinue()) return 'cancelled';
     const evidence = options.probe();
     if (evidence.kind === 'auth-required') return 'auth-required';
-    if (tracker.observe(evidence)) return 'ready';
+    const stable = tracker.observe(evidence);
+    if (stable && evidence.pdfState === 'available') return 'ready';
+    const finalAttempt = attempt === maxAttempts - 1;
+    if (finalAttempt) {
+      return stable && evidence.pdfState === 'absent-confirmed' ? 'ready' : 'timeout';
+    }
     await options.sleep(intervalMs);
   }
   return 'timeout';

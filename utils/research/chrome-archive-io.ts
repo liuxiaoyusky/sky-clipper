@@ -26,16 +26,20 @@ export async function waitForArchiveDownloadsToSettle(
   options: ArchiveDownloadRecoveryOptions = {},
 ): Promise<void> {
   const downloads = options.downloads || chrome.downloads;
-  const sleep = options.sleep || ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-  const maxAttempts = options.maxAttempts ?? 20;
+  const sleep =
+    options.sleep ||
+    ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const maxAttempts = options.maxAttempts;
   const intervalMs = options.intervalMs ?? 250;
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     const active = await downloads.search({
       filenameRegex: ARCHIVE_FILENAME_RE,
       state: 'in_progress',
     });
     if (!active.length) return;
-    if (attempt === maxAttempts - 1) throw new Error(DOWNLOAD_RECOVERY_TIMEOUT_ERROR);
+    if (maxAttempts !== undefined && attempt === maxAttempts - 1) {
+      throw new Error(DOWNLOAD_RECOVERY_TIMEOUT_ERROR);
+    }
     await sleep(intervalMs);
   }
 }
