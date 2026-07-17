@@ -4,6 +4,8 @@ import type { ArchiveIo } from './archive-writer';
 const OFFSCREEN_PATH = 'offscreen.html';
 const ARCHIVE_FILENAME_RE = 'Fin-report-clipper Backup';
 const SAFE_ARCHIVE_PREFIX = `${ARCHIVE_FILENAME_RE}/`;
+const DOWNLOAD_CLEANUP_ERROR = 'Archive download cleanup failed';
+const BLOB_CLEANUP_ERROR = 'Archive Blob cleanup failed';
 let creatingOffscreen: Promise<void> | null = null;
 
 export async function eraseArchiveDownloadHistory(): Promise<void> {
@@ -92,6 +94,7 @@ async function download(
     conflictAction: 'overwrite',
     saveAs: false,
   });
+  let operationError: unknown;
   try {
     const item = await waitForDownload(downloadId);
     if (
@@ -101,11 +104,24 @@ async function download(
       throw new Error(`Unexpected download MIME: ${item.mime || 'unknown'}`);
     }
   } catch (error) {
-    await chrome.downloads.removeFile(downloadId).catch(() => {});
-    throw error;
-  } finally {
-    await chrome.downloads.erase({ id: downloadId }).catch(() => {});
+    operationError = error;
   }
+
+  let cleanupFailed = false;
+  if (operationError) {
+    try {
+      await chrome.downloads.removeFile(downloadId);
+    } catch {
+      cleanupFailed = true;
+    }
+  }
+  try {
+    await chrome.downloads.erase({ id: downloadId });
+  } catch {
+    cleanupFailed = true;
+  }
+  if (cleanupFailed) throw new Error(DOWNLOAD_CLEANUP_ERROR);
+  if (operationError) throw operationError;
 }
 
 async function createBlobUrl(content: string, mime: string): Promise<string> {
@@ -139,11 +155,19 @@ export function createChromeArchiveIo(): ArchiveIo {
   return {
     async writeText(path, content, mime) {
       const url = await createBlobUrl(content, mime);
+      let operationError: unknown;
       try {
         await download(path, url);
-      } finally {
-        await revokeBlobUrl(url).catch(() => {});
+      } catch (error) {
+        operationError = error;
       }
+      try {
+        await revokeBlobUrl(url);
+      } catch {
+        await chrome.offscreen.closeDocument().catch(() => {});
+        throw new Error(BLOB_CLEANUP_ERROR);
+      }
+      if (operationError) throw operationError;
     },
     async downloadUrl(path, url, expectedMimePrefix) {
       await download(path, url, expectedMimePrefix);

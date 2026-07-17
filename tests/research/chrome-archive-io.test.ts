@@ -46,6 +46,24 @@ describe('Chrome archive downloads', () => {
     expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
   });
 
+  it('reports a sanitized cleanup failure when a valid PDF history entry cannot be erased', async () => {
+    const mocks = installDownloads({ state: 'complete', mime: 'application/pdf' });
+    mocks.erase.mockRejectedValueOnce(
+      new Error('Chrome error at https://rsch.baml.com/r?token=private-token'),
+    );
+
+    const result = createChromeArchiveIo().downloadUrl(
+      'Fin-report-clipper Backup/BofA/2026/report/original.pdf',
+      'https://rsch.baml.com/r?q=fake',
+      'application/pdf',
+    );
+
+    await expect(result).rejects.toThrow('Archive download cleanup failed');
+    await expect(result).rejects.not.toThrow('private-token');
+    expect(mocks.removeFile).not.toHaveBeenCalled();
+    expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
+  });
+
   it('removes a non-PDF response and still erases its history entry', async () => {
     const mocks = installDownloads({ state: 'complete', mime: 'text/html' });
     await expect(
@@ -55,6 +73,24 @@ describe('Chrome archive downloads', () => {
         'application/pdf',
       ),
     ).rejects.toThrow('Unexpected download MIME');
+    expect(mocks.removeFile).toHaveBeenCalledWith(42);
+    expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
+  });
+
+  it('reports a sanitized cleanup failure after an invalid download cannot be removed or erased', async () => {
+    const mocks = installDownloads({ state: 'complete', mime: 'text/html' });
+    mocks.removeFile.mockRejectedValueOnce(new Error('remove denied: private-token'));
+    mocks.erase.mockRejectedValueOnce(new Error('erase denied: private-signature'));
+
+    const result = createChromeArchiveIo().downloadUrl(
+      'Fin-report-clipper Backup/BofA/2026/report/original.pdf',
+      'https://rsch.baml.com/r?q=fake',
+      'application/pdf',
+    );
+
+    await expect(result).rejects.toThrow('Archive download cleanup failed');
+    await expect(result).rejects.not.toThrow('private-token');
+    await expect(result).rejects.not.toThrow('private-signature');
     expect(mocks.removeFile).toHaveBeenCalledWith(42);
     expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
   });
@@ -93,5 +129,44 @@ describe('Chrome archive downloads', () => {
     expect(mocks.erase).toHaveBeenCalledWith({
       filenameRegex: expect.stringContaining('Fin-report-clipper Backup'),
     });
+  });
+
+  it('closes the offscreen document and reports a sanitized error when Blob release fails', async () => {
+    const mocks = installDownloads({ state: 'complete', mime: 'text/markdown' });
+    const closeDocument = vi.fn(async () => undefined);
+    vi.stubGlobal('chrome', {
+      downloads: {
+        ...chrome.downloads,
+      },
+      runtime: {
+        ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT' },
+        getURL: vi.fn(() => 'chrome-extension://test/offscreen.html'),
+        getContexts: vi.fn(async () => []),
+        sendMessage: vi
+          .fn()
+          .mockImplementationOnce(async (request) => ({
+            ok: true,
+            requestId: request.requestId,
+            url: 'blob:private-markdown-url',
+          }))
+          .mockRejectedValueOnce(new Error('Blob release failed: private-markdown-content')),
+      },
+      offscreen: {
+        Reason: { BLOBS: 'BLOBS' },
+        createDocument: vi.fn(async () => undefined),
+        closeDocument,
+      },
+    });
+
+    const result = createChromeArchiveIo().writeText(
+      'Fin-report-clipper Backup/BofA/2026/report/original.md',
+      'private-markdown-content',
+      'text/markdown;charset=utf-8',
+    );
+
+    await expect(result).rejects.toThrow('Archive Blob cleanup failed');
+    await expect(result).rejects.not.toThrow('private-markdown-content');
+    expect(closeDocument).toHaveBeenCalledTimes(1);
+    expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
   });
 });
