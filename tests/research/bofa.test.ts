@@ -58,6 +58,31 @@ describe('BofA adapter', () => {
     expect(result.document.originalMarkdown).not.toContain('summary:');
   });
 
+  it('removes private URL attributes from every element in a complex table', async () => {
+    const tableCell = document.querySelector<HTMLTableCellElement>('table td');
+    const privateTableUrl =
+      'https://rsch.baml.com/r?q=table-report&e=table%40example.com&h=table-signature';
+    for (const [tagName, attribute] of [
+      ['video', 'src'],
+      ['source', 'src'],
+      ['link', 'href'],
+    ] as const) {
+      const element = document.createElement(tagName);
+      element.setAttribute(attribute, privateTableUrl);
+      tableCell?.append(element);
+    }
+
+    const result = await bofaAdapter.extractOriginal(
+      document,
+      privateUrl,
+      '2026-07-17T16:30:00+09:00',
+    );
+
+    expect(result.document.originalMarkdown).not.toContain('table-report');
+    expect(result.document.originalMarkdown).not.toContain('table@example.com');
+    expect(result.document.originalMarkdown).not.toContain('table-signature');
+  });
+
   it('omits absent optional metadata rather than writing empty fields', async () => {
     document.querySelector('#reportAuthor')?.remove();
     document.querySelector('#reportPublishDate')?.remove();
@@ -78,5 +103,51 @@ describe('BofA adapter', () => {
     expect(tracker.observe(evidence)).toBe(false);
     expect(tracker.observe(evidence)).toBe(false);
     expect(tracker.observe(evidence)).toBe(true);
+  });
+
+  it('resets readiness when equal-length text changes in the body middle', () => {
+    const tracker = new StableReadinessTracker(3);
+    const first = bofaAdapter.readinessEvidence(document, new URL(privateUrl));
+    expect(tracker.observe(first)).toBe(false);
+    expect(tracker.observe(first)).toBe(false);
+
+    const paragraph = document.querySelector('[id$="_Body"] p');
+    if (!paragraph?.textContent) throw new Error('Fixture paragraph is unavailable');
+    paragraph.textContent = paragraph.textContent.replace('Demand', 'Supply');
+    const changed = bofaAdapter.readinessEvidence(document, new URL(privateUrl));
+
+    expect(changed.bodyTextLength).toBe(first.bodyTextLength);
+    expect(tracker.observe(changed)).toBe(false);
+  });
+
+  it('bounds every readiness evidence string', () => {
+    const sourceId = document.querySelector<HTMLInputElement>('#reportPid');
+    const title = document.querySelector<HTMLInputElement>('#reportTitle');
+    if (!sourceId || !title) throw new Error('Fixture metadata is unavailable');
+    sourceId.value = 'S'.repeat(2000);
+    title.value = 'T'.repeat(2000);
+
+    const evidence = bofaAdapter.readinessEvidence(document, new URL(privateUrl));
+
+    expect(evidence.sourceId?.length).toBeLessThanOrEqual(256);
+    expect(evidence.title?.length).toBeLessThanOrEqual(256);
+    expect(evidence.tailText).toMatch(/^fnv1a64:[0-9a-f]{16}$/);
+  });
+
+  it('rejects extraction from unsupported routes without exposing the raw URL', async () => {
+    const unsupportedUrl =
+      'https://rsch.baml.com/home?q=private-route&e=route%40example.com&h=route-signature';
+
+    await expect(
+      bofaAdapter.extractOriginal(document, unsupportedUrl, '2026-07-17T16:30:00+09:00'),
+    ).rejects.toThrow(/^BofA report is not extractable$/);
+  });
+
+  it('rejects extraction from auth pages without exposing the raw URL', async () => {
+    document.body.innerHTML = '<input type="password"><p>Access denied</p>';
+
+    await expect(
+      bofaAdapter.extractOriginal(document, privateUrl, '2026-07-17T16:30:00+09:00'),
+    ).rejects.toThrow(/^BofA report is not extractable$/);
   });
 });

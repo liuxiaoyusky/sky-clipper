@@ -7,10 +7,8 @@ const SAFE_ATTRIBUTES = new Set([
   'alt',
   'colspan',
   'height',
-  'href',
   'rowspan',
   'scope',
-  'src',
   'title',
   'width',
 ]);

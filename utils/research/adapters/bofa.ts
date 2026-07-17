@@ -7,6 +7,16 @@ import { canonicalizeBofaUrl, sanitizeTextContent } from '../privacy';
 const REPORT_PATHS = new Set(['/r', '/report']);
 const BODY_SELECTOR = '[id$="_Body"]';
 const AUTH_TEXT = ['access denied', 'too many requests', 'verify you are human', 'captcha'];
+const MAX_EVIDENCE_TEXT_LENGTH = 256;
+
+function bodyFingerprint(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= BigInt(value.charCodeAt(index));
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return `fnv1a64:${hash.toString(16).padStart(16, '0')}`;
+}
 
 function inputValue(document: Document, id: string, baseUrl?: string): string | undefined {
   const raw = (document.getElementById(id) as HTMLInputElement | null)?.value || '';
@@ -77,11 +87,11 @@ export const bofaAdapter: ResearchSiteAdapter = {
     const normalized = body?.textContent?.replace(/\s+/g, ' ').trim() || '';
     return {
       kind: classifyBofaPage(document, url),
-      sourceId: getSourceId(document) || undefined,
-      title: inputValue(document, 'reportTitle'),
+      sourceId: getSourceId(document)?.slice(0, MAX_EVIDENCE_TEXT_LENGTH) || undefined,
+      title: inputValue(document, 'reportTitle')?.slice(0, MAX_EVIDENCE_TEXT_LENGTH),
       bodyTextLength: normalized.length,
       tableCount: body?.querySelectorAll('table').length || 0,
-      tailText: normalized.slice(-160),
+      tailText: bodyFingerprint(normalized),
     };
   },
 
@@ -94,6 +104,15 @@ export const bofaAdapter: ResearchSiteAdapter = {
   },
 
   async extractOriginal(document, rawUrl, capturedAt) {
+    let url: URL;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      throw new Error('BofA report is not extractable');
+    }
+    if (classifyBofaPage(document, url) !== 'report-html') {
+      throw new Error('BofA report is not extractable');
+    }
     const canonical = canonicalizeBofaUrl(rawUrl);
     const sourceId = inputValue(document, 'reportPid');
     const title = inputValue(document, 'reportTitle', rawUrl);
