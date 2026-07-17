@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head><title>Sanitized BofA report fixture</title></head>
+  <body class="report">
+    <input id="reportPid" value="BOFA-TEST-001" />
+    <input id="reportTitle" value="Taiwan Semiconductor Manufacturing Co." />
+    <input id="reportSubTitle" value="Quarterly sales and margin update for analyst@example.com" />
+    <input id="reportAuthor" value="Analyst One; Analyst Two" />
+    <input id="reportPublishDate" value="16 July 2026 02:00PM EDT" />
+    <a
+      id="print_pdf_anchor"
+      title="PDF"
+      href="https://rsch.baml.com/r?q=fake-report&amp;e=analyst%40example.com&amp;h=fake-signature"
+    >PDF</a>
+    <main id="report-center-container">
+      <div id="Fixture_HtmlComponent_Body">
+        <h2>Investment rationale</h2>
+        <p>
+          Demand remains supported by high-performance computing. This paragraph is deliberately
+          long enough to represent a real report body without copying any proprietary user sample.
+        </p>
+        <p>
+          The report preserves source order, prose, exhibits, links and disclosures. It does not
+          add a generated summary, category or tag during capture.
+        </p>
+        <table>
+          <caption>Exhibit 1: Estimate comparison</caption>
+          <thead><tr><th>Metric</th><th colspan="2">2027E</th></tr></thead>
+          <tbody><tr><td>Revenue</td><td>BofAe</td><td>Street</td></tr></tbody>
+        </table>
+        <img
+          src="https://cdn.example.com/chart.png?width=1200&amp;token=fake-image-token"
+          alt="Chart prepared for analyst@example.com"
+        />
+        <p><a href="https://rsch.baml.com/r?q=another&amp;e=reader%40example.com">Related report</a></p>
+        <p>Public analyst contact: public.analyst@bofa.example</p>
+        <h2>Disclosures</h2>
+        <p>Important source disclosure text remains part of the captured report.</p>
+      </div>
+    </main>
+  </body>
+</html>
