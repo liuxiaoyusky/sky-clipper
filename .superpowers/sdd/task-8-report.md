@@ -66,3 +66,59 @@ release workflow was reviewed as text but intentionally not executed, so tag-tri
 permissions, audit availability, and release-asset upload remain CI/release-environment checks for
 Task 9's candidate process. No Firefox/Edge artifact, command, job, or user-facing workflow text
 remains in the configured automation surface.
+
+## Review 1 follow-up: release least privilege and generated-output coverage
+
+### RED
+
+Added structural regression checks before changing automation:
+
+- exact tag-only trigger; separate read-only `build` and `contents: write` `release` jobs; build
+  checkout credentials disabled; version/package check; SHA-pinned actions; verified artifact
+  transfer; versioned source for the alias; and exactly two publish assets;
+- manifest version 3, absent-or-empty optional permissions/hosts, exact generated content-script JS
+  set, and ASCII traversal driven by every JavaScript file declared in the manifest.
+
+```sh
+npm test -- tests/research/release-config.test.ts
+```
+
+Result: FAIL as expected — the old workflow had no `build` job, and the existing manifest/ASCII
+scripts did not contain the new capability or generated-file constraints. A follow-up RED caught
+the inherited top-level `contents: write` permission. The test helper's first EOF parsing mistake
+was corrected before evaluating workflow behavior.
+
+### GREEN
+
+- Release now has a read-only `build` job that disables checkout credentials, verifies the tag and
+  package version, runs `npm run verify`, zips Chrome, creates the stable alias from the versioned
+  archive, then uploads exactly those two files through a SHA-pinned artifact action.
+- The `release` job depends on `build`, has the only `contents: write` permission, downloads the
+  verified artifact through a SHA-pinned action, and only creates the GitHub release with the two
+  downloaded Chrome assets. It does not checkout, install dependencies, build, or package.
+- `check-manifest` now asserts MV3, absent-or-empty optional permission fields, and the exact
+  content-script JavaScript set. `check-content-ascii` loads the generated manifest and checks each
+  declared content script rather than a hardcoded path.
+
+Final verification:
+
+```sh
+npm test -- tests/research/release-config.test.ts
+# PASS: 1 file, 5 tests
+npm run verify
+# PASS: 15 files, 83 tests; compile, Chrome build, manifest, and ASCII checks
+npm run zip
+# PASS: .output/fin-report-clipper-0.1.0-chrome.zip
+```
+
+The local stable alias was copied from that versioned archive and both SHA-256 values were
+`ebe32bac1be7d245da9d6fb1c65c73a2e4038615b5b5cb00817cfd3afb7cccd6`. Action scans show only
+40-character SHA pins; old browser/brand scans return no workflow/config hits; `git diff --check`
+passes.
+
+## Review 1 self-review
+
+The release workflow remains unexecuted by design: this work neither uploaded an artifact to GitHub
+nor created, updated, or pushed a release. The local alias copy is restricted to ignored `.output`.
+The remaining boundary is GitHub-hosted artifact transfer and release permissions under a real tag,
+which belongs to Task 9's candidate validation rather than this local hardening task.

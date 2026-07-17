@@ -6,15 +6,19 @@ on:
       - 'v*.*.*'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
-    name: Build and publish Chrome research extension
+  build:
+    name: Verify and package Chrome research extension
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -52,6 +56,28 @@ jobs:
         run: |
           cp ".output/fin-report-clipper-${GITHUB_REF_NAME#v}-chrome.zip" \
             ".output/fin-report-clipper-chrome.zip"
+
+      - name: Upload verified Chrome release assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fin-report-clipper-chrome-release
+          path: |
+            .output/fin-report-clipper-${GITHUB_REF_NAME#v}-chrome.zip
+            .output/fin-report-clipper-chrome.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish verified Chrome research extension
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified Chrome release assets
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: fin-report-clipper-chrome-release
+          path: .output
 
       - name: Create GitHub Release
         env:
