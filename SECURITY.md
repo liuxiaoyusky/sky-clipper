@@ -2,16 +2,20 @@
 
 ## Supported version
 
-Security fixes are applied to the latest release of 兆基clipper. Older releases remain available for reproducibility, but users should upgrade to the latest version.
+Security fixes apply to the latest authorized Fin-report-clipper release.
 
 ## Reporting a vulnerability
 
-Please use GitHub's private vulnerability reporting for this repository instead of opening a public issue. Do not include API keys, tokens, private documents, or other sensitive data in public issues or pull requests.
+Use the repository's private vulnerability reporting. Do not put research URLs, report HTML/PDF, email addresses, tokens, signatures, credentials, or private documents in public issues or pull requests. Revoke exposed credentials before sharing sanitized technical details.
 
-If a credential may have been exposed, revoke or rotate it immediately before reporting the technical details.
+## Research artifact handling
+
+Only synthetic sanitized fixtures belong in the repository. Real BofA files remain outside the repository and must not be copied into logs, test reports, commits, or release assets.
 
 ## Development toolchain
 
-Production dependencies are required to pass `npm audit --omit=dev --audit-level=high`. Critical development dependency findings are also blocked in CI.
+Production dependencies must pass `npm audit --omit=dev --audit-level=high`; critical development dependency findings are blocked. `npm run verify` is required before an authorized release.
 
-The remaining esbuild advisory is inherited through the WXT build toolchain and is not included in the published browser extension. Forcing the patched esbuild major version breaks the WXT 0.19 build, while WXT 0.20 currently breaks this project's required ASCII content-script output. Keep the alert open and reassess when the upstream toolchain supports a compatible patched release.
+## License boundary
+
+The existing `LICENSE` remains authoritative. A release or redistribution must not proceed without the copyright holder authorization required by that license.
