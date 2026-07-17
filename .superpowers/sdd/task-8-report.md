@@ -122,3 +122,60 @@ The release workflow remains unexecuted by design: this work neither uploaded an
 nor created, updated, or pushed a release. The local alias copy is restricted to ignored `.output`.
 The remaining boundary is GitHub-hosted artifact transfer and release permissions under a real tag,
 which belongs to Task 9's candidate validation rather than this local hardening task.
+
+## Review 2 follow-up: non-hidden artifact handoff and fixture checks
+
+### RED
+
+Added regressions before implementation for:
+
+- an exact tag-only trigger, exactly `build` and `release` jobs, validated package-version step/job
+  output wiring, two shell-staged files under non-hidden `release-assets/`, identical upload/download
+  artifact names and paths, and exactly two published downloaded assets;
+- temporary output-root fixtures that must reject MV2, non-empty optional permissions, non-empty
+  optional hosts, extra content-script JavaScript, and a non-ASCII second declared content script;
+- removal of the unreachable custom release-notes branch.
+
+```sh
+npm test -- tests/research/release-config.test.ts
+```
+
+Result: FAIL as expected — the workflow had no staging step, its upload paths were hidden and used
+unexpanded Bash syntax, and both checker scripts ignored every supplied fixture path. Six new cases
+failed for those reasons.
+
+### GREEN
+
+- The validated package version is now a step output and read-only build-job output. A shell step
+  copies the WXT versioned zip into `release-assets/`, then copies that staged file to the exact
+  stable alias. Upload lists exactly those two non-hidden files.
+- The write-permission job downloads the same named artifact into the same `release-assets/` path,
+  receives the validated version through `needs.build.outputs.version`, and passes exactly those two
+  downloaded files to `gh release create`.
+- The release command now uses only `--generate-notes`; the unreachable file-notes branch is gone.
+- Both checker CLIs accept an optional output-root argument while preserving the production default,
+  enabling real temporary-fixture execution rather than textual script inspection alone.
+
+Final verification:
+
+```sh
+npm test -- tests/research/release-config.test.ts
+# PASS: 1 file, 11 tests
+npm run verify
+# PASS: 15 files, 89 tests; compile, Chrome build, manifest, and ASCII checks
+npm run zip
+# PASS: .output/fin-report-clipper-0.1.0-chrome.zip
+```
+
+Local workflow-equivalent staging produced exactly
+`release-assets/fin-report-clipper-0.1.0-chrome.zip` and
+`release-assets/fin-report-clipper-chrome.zip`. The source and both staged files share SHA-256
+`31e29c9010578d7e6f651b3e40732eac416ed90b77fa02a1fa709bc735a765e6`. Trigger/notes scans,
+non-SHA action scans, old browser/brand scans, and `git diff --check` all pass.
+
+## Review 2 self-review
+
+The staging directory contains only ignored local zip artifacts created for validation; no GitHub
+artifact upload, release, or push was executed. The structure test rejects extra top-level triggers
+and mismatched artifact wiring, while fixture tests execute both CLI scripts against isolated temp
+trees. A real GitHub artifact round-trip and tag permission check remain Task 9 acceptance work.

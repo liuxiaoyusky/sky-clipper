@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -27,6 +29,7 @@ jobs:
           cache: npm
 
       - name: Verify tag matches package version
+        id: version
         shell: bash
         run: |
           TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -35,6 +38,7 @@ jobs:
             echo "Tag version $TAG_VERSION does not match package.json $PACKAGE_VERSION"
             exit 1
           fi
+          echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: npm ci
@@ -51,19 +55,24 @@ jobs:
       - name: Build Chrome release archive
         run: npm run zip
 
-      - name: Create stable latest alias
+      - name: Stage Chrome release assets
         shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cp ".output/fin-report-clipper-${GITHUB_REF_NAME#v}-chrome.zip" \
-            ".output/fin-report-clipper-chrome.zip"
+          mkdir -p release-assets
+          cp ".output/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip" \
+            "release-assets/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip"
+          cp "release-assets/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip" \
+            "release-assets/fin-report-clipper-chrome.zip"
 
       - name: Upload verified Chrome release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: fin-report-clipper-chrome-release
           path: |
-            .output/fin-report-clipper-${GITHUB_REF_NAME#v}-chrome.zip
-            .output/fin-report-clipper-chrome.zip
+            release-assets/fin-report-clipper-${{ steps.version.outputs.version }}-chrome.zip
+            release-assets/fin-report-clipper-chrome.zip
           if-no-files-found: error
 
   release:
@@ -77,28 +86,23 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: fin-report-clipper-chrome-release
-          path: .output
+          path: release-assets
 
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
         shell: bash
         run: |
-          NOTES_FILE="RELEASE_NOTES_${GITHUB_REF_NAME}.md"
           ASSETS=(
-            ".output/fin-report-clipper-${GITHUB_REF_NAME#v}-chrome.zip"
-            ".output/fin-report-clipper-chrome.zip"
+            "release-assets/fin-report-clipper-${RELEASE_VERSION}-chrome.zip"
+            "release-assets/fin-report-clipper-chrome.zip"
           )
 
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "Release $GITHUB_REF_NAME already exists; refusing to overwrite immutable assets."
             exit 1
-          elif [[ -f "$NOTES_FILE" ]]; then
-            gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" \
-              --title "Fin-report-clipper ${GITHUB_REF_NAME#v}" \
-              --notes-file "$NOTES_FILE"
-          else
-            gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" \
-              --title "Fin-report-clipper ${GITHUB_REF_NAME#v}" \
-              --generate-notes
           fi
+          gh release create "$GITHUB_REF_NAME" "${ASSETS[@]}" \
+            --title "Fin-report-clipper $RELEASE_VERSION" \
+            --generate-notes

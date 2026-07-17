@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-const outputRoot = '.output/chrome-mv3';
+const outputRoot = process.argv[2] || '.output/chrome-mv3';
 const manifest = JSON.parse(readFileSync(`${outputRoot}/manifest.json`, 'utf8'));
 const contentScripts = manifest.content_scripts?.flatMap((script) => script.js || []) || [];
 if (contentScripts.length === 0) throw new Error('Manifest declares no content-script JavaScript');
