@@ -104,6 +104,34 @@ describe('BofA adapter', () => {
     expect(result.document.originalMarkdown).not.toContain('table-signature');
   });
 
+  it('removes private comment and template content from a complex table', async () => {
+    const tableCell = document.querySelector<HTMLTableCellElement>('table td');
+    const privateCommentUrl =
+      'https://rsch.baml.com/r?q=comment-private-report&e=comment.private@example.com&h=comment-private-signature';
+    const privateTemplateUrl =
+      'https://rsch.baml.com/r?q=template-private-report&e=template.private@example.com&h=template-private-signature';
+    const template = document.createElement('template');
+    template.innerHTML = `<a href="${privateTemplateUrl}">Hidden template link</a>`;
+    tableCell?.append(document.createComment(privateCommentUrl), template);
+
+    const result = await bofaAdapter.extractOriginal(
+      document,
+      privateUrl,
+      '2026-07-17T16:30:00+09:00',
+    );
+
+    for (const privateValue of [
+      'comment-private-report',
+      'comment.private@example.com',
+      'comment-private-signature',
+      'template-private-report',
+      'template.private@example.com',
+      'template-private-signature',
+    ]) {
+      expect(result.document.originalMarkdown).not.toContain(privateValue);
+    }
+  });
+
   it('omits absent optional metadata rather than writing empty fields', async () => {
     document.querySelector('#reportAuthor')?.remove();
     document.querySelector('#reportPublishDate')?.remove();

@@ -15,8 +15,15 @@ const SAFE_ATTRIBUTES = new Set([
 
 function cleanClone(root: HTMLElement, baseUrl: string): HTMLElement {
   const clone = root.cloneNode(true) as HTMLElement;
+  const comments = clone.ownerDocument.createTreeWalker(clone, NodeFilter.SHOW_COMMENT);
+  let comment = comments.nextNode();
+  while (comment) {
+    const nextComment = comments.nextNode();
+    comment.parentNode?.removeChild(comment);
+    comment = nextComment;
+  }
   clone
-    .querySelectorAll('script, style, noscript, form, input, button, iframe, canvas, svg, [hidden], [aria-hidden="true"]')
+    .querySelectorAll('script, style, noscript, template, form, input, button, iframe, canvas, svg, [hidden], [aria-hidden="true"]')
     .forEach((node) => node.remove());
   clone.querySelectorAll<HTMLElement>('*').forEach((element) => {
     if (/display\s*:\s*none/i.test(element.getAttribute('style') || '')) {
