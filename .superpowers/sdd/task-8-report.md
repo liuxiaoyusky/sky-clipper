@@ -1,0 +1,68 @@
+# Task 8 Report: Chrome-only CI、manifest 断言与发布包命名
+
+## Status
+
+Completed. This task changes local verification, GitHub automation configuration, the pull-request
+template, and Dependabot policy only. It does not publish, upload, push, create a GitHub release,
+or alter `LICENSE`.
+
+## RED -> GREEN
+
+### RED
+
+Added `tests/research/release-config.test.ts` before changing automation. The initial focused run:
+
+```sh
+npm test -- tests/research/release-config.test.ts
+```
+
+failed as expected: CI had no `npm run verify` and still referenced `build:edge`; release had the
+old `zhaoji-clipper` archive names and Edge assets.
+
+Added a second boundary assertion requiring the generated-manifest check to reject both options and
+icons. It failed as expected because the initial check did not list `icons` as forbidden.
+
+### GREEN
+
+- Added `check:ascii`, `check:manifest`, and the single `verify` command. The manifest checker
+  asserts exact Fin-report-clipper identity, Chrome 116 floor, the three allowed permissions, the
+  sole BofA host/content-script match, and rejects options, icons, and legacy capabilities.
+- CI now calls only `npm run verify`. Release verifies first, makes one Chrome archive with
+  `npm run zip`, and publishes only the versioned Chrome archive plus the exact stable alias
+  `fin-report-clipper-chrome.zip` when the release workflow is intentionally triggered.
+- Removed Edge and legacy brand paths from CI/release/PR configuration. Dependabot retains only
+  the requested WXT/ASCII safety major-version exclusions and monthly GitHub Actions updates.
+
+The focused config test passes after each change:
+
+```sh
+npm test -- tests/research/release-config.test.ts
+# PASS: 1 file, 3 tests
+```
+
+## Verification
+
+```sh
+npm run verify
+# PASS: 15 files, 81 tests
+# PASS: TypeScript compile
+# PASS: Chrome build
+# PASS: content script ASCII check
+# PASS: exact Chrome manifest check
+
+npm run zip
+# PASS: .output/fin-report-clipper-0.1.0-chrome.zip
+```
+
+The zip inventory contains only the Chrome MV3 build files. A scan over `package.json`, `.github`,
+and `scripts` found no Edge, Firefox, or `zhaoji` workflow/command/brand references. Workflow
+inspection confirms only the versioned Chrome archive and `fin-report-clipper-chrome.zip` alias.
+`git diff --check` passes.
+
+## Self-review and remaining boundary
+
+The only generated artifact was a local zip for inspection; it was not uploaded or released. The
+release workflow was reviewed as text but intentionally not executed, so tag-triggered GitHub
+permissions, audit availability, and release-asset upload remain CI/release-environment checks for
+Task 9's candidate process. No Firefox/Edge artifact, command, job, or user-facing workflow text
+remains in the configured automation surface.

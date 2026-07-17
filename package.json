@@ -11,6 +11,9 @@
     "compile": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "check:ascii": "node scripts/check-content-ascii.mjs",
+    "check:manifest": "node scripts/check-manifest.mjs",
+    "verify": "npm test && npm run compile && npm run build && npm run check:ascii && npm run check:manifest",
     "postinstall": "wxt prepare"
   },
   "dependencies": {

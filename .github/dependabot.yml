@@ -20,12 +20,6 @@ updates:
         versions: [">= 19.0.0"]
       - dependency-name: "@types/react-dom"
         versions: [">= 19.0.0"]
-      # Defuddle 的小版本会改变正文提取结果，必须先跑站点级人工回归。
-      - dependency-name: defuddle
-        update-types:
-          - version-update:semver-minor
-          - version-update:semver-major
-
   - package-ecosystem: github-actions
     directory: /
     schedule:

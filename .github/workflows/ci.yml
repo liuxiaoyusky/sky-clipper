@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   validate:
-    name: Validate extension
+    name: Validate Chrome research capture
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,15 +32,5 @@ jobs:
       - name: Reject critical development vulnerabilities
         run: npm audit --audit-level=critical
 
-      - name: Type check
-        run: npm run compile
-
-      - name: Build Chrome
-        run: npm run build
-
-      - name: Build Edge
-        run: npm run build:edge
-
-      - name: Verify content script is ASCII
-        run: |
-          node -e "const fs=require('fs');const p='.output/chrome-mv3/content-scripts/content.js';const b=fs.readFileSync(p);if([...b].some(x=>x>127)){console.error('content.js contains non-ASCII bytes');process.exit(1)}"
+      - name: Verify Fin-report-clipper
+        run: npm run verify
