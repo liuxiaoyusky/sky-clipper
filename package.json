@@ -1,19 +1,16 @@
 {
-  "name": "zhaoji-clipper",
-  "displayName": "兆基clipper",
-  "description": "兆基clipper —— 把网页内容简存到你的 Obsidian 仓库",
-  "version": "4.0.2",
+  "name": "fin-report-clipper",
+  "displayName": "Fin-report-clipper",
+  "description": "在 Chrome 中自动识别并归档受支持的金融研报",
+  "version": "0.1.0",
   "type": "module",
   "scripts": {
     "dev": "wxt",
-    "dev:firefox": "wxt -b firefox",
-    "dev:edge": "wxt -b edge",
     "build": "wxt build",
-    "build:firefox": "wxt build -b firefox",
-    "build:edge": "wxt build -b edge",
     "zip": "wxt zip",
-    "zip:edge": "wxt zip -b edge",
     "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
@@ -24,11 +21,14 @@
     "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
+    "@types/node": "^26.1.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/turndown": "^5.0.6",
     "@wxt-dev/module-react": "^1.1.3",
+    "jsdom": "^29.1.1",
     "typescript": "^5.7.2",
+    "vitest": "^4.1.10",
     "wxt": "^0.19.13"
   },
   "overrides": {
