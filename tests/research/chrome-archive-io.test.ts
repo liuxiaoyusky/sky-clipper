@@ -131,7 +131,7 @@ describe('Chrome archive downloads', () => {
     });
   });
 
-  it('closes the offscreen document and reports a sanitized error when Blob release fails', async () => {
+  it('treats a successful offscreen close as a released Blob when revoke fails', async () => {
     const mocks = installDownloads({ state: 'complete', mime: 'text/markdown' });
     const closeDocument = vi.fn(async () => undefined);
     vi.stubGlobal('chrome', {
@@ -164,8 +164,49 @@ describe('Chrome archive downloads', () => {
       'text/markdown;charset=utf-8',
     );
 
+    await expect(result).resolves.toBeUndefined();
+    expect(closeDocument).toHaveBeenCalledTimes(1);
+    expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
+  });
+
+  it('reports a sanitized error only when Blob revoke and offscreen close both fail', async () => {
+    const mocks = installDownloads({ state: 'complete', mime: 'text/markdown' });
+    const closeDocument = vi.fn(async () => {
+      throw new Error('close failed: private-blob-url');
+    });
+    vi.stubGlobal('chrome', {
+      downloads: {
+        ...chrome.downloads,
+      },
+      runtime: {
+        ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT' },
+        getURL: vi.fn(() => 'chrome-extension://test/offscreen.html'),
+        getContexts: vi.fn(async () => []),
+        sendMessage: vi
+          .fn()
+          .mockImplementationOnce(async (request) => ({
+            ok: true,
+            requestId: request.requestId,
+            url: 'blob:private-markdown-url',
+          }))
+          .mockRejectedValueOnce(new Error('Blob release failed: private-markdown-content')),
+      },
+      offscreen: {
+        Reason: { BLOBS: 'BLOBS' },
+        createDocument: vi.fn(async () => undefined),
+        closeDocument,
+      },
+    });
+
+    const result = createChromeArchiveIo().writeText(
+      'Fin-report-clipper Backup/BofA/2026/report/original.md',
+      'private-markdown-content',
+      'text/markdown;charset=utf-8',
+    );
+
     await expect(result).rejects.toThrow('Archive Blob cleanup failed');
     await expect(result).rejects.not.toThrow('private-markdown-content');
+    await expect(result).rejects.not.toThrow('private-blob-url');
     expect(closeDocument).toHaveBeenCalledTimes(1);
     expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
   });
