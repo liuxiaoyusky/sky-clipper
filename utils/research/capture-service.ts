@@ -7,11 +7,58 @@ import type { ArchivePlan, CaptureResult, CaptureSubmission } from './types';
 export interface CaptureServiceDependencies {
   history: HistoryRepository;
   createIo(): ArchiveIo;
+  recovery?: CaptureStartupRecovery;
   write?: (
     plan: ArchivePlan,
     submission: CaptureSubmission,
     io: ArchiveIo,
   ) => Promise<ArchiveWriteResult>;
+}
+
+export const ACTIVE_CAPTURE_LEASE_KEY = 'fin_report_clipper_active_capture';
+
+export interface SessionStoragePort {
+  get(key: string): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+  remove(key: string): Promise<void>;
+}
+
+export interface CaptureLease {
+  acquire(): Promise<void>;
+  release(): Promise<void>;
+}
+
+export interface CaptureStartupRecovery {
+  ready(): Promise<void>;
+  lease: CaptureLease;
+}
+
+export function createCaptureStartupRecovery(dependencies: {
+  session: SessionStoragePort;
+  sweep(): Promise<void>;
+}): CaptureStartupRecovery {
+  const ready = (async () => {
+    const state = await dependencies.session.get(ACTIVE_CAPTURE_LEASE_KEY);
+    await dependencies.sweep();
+    if (state[ACTIVE_CAPTURE_LEASE_KEY] !== undefined) {
+      await dependencies.session.remove(ACTIVE_CAPTURE_LEASE_KEY);
+    }
+  })();
+  void ready.catch(() => {});
+
+  return {
+    ready: () => ready,
+    lease: {
+      async acquire() {
+        await dependencies.session.set({
+          [ACTIVE_CAPTURE_LEASE_KEY]: { startedAt: new Date().toISOString() },
+        });
+      },
+      async release() {
+        await dependencies.session.remove(ACTIVE_CAPTURE_LEASE_KEY);
+      },
+    },
+  };
 }
 
 export interface CaptureService {
@@ -23,6 +70,33 @@ export function createCaptureService(dependencies: CaptureServiceDependencies): 
   const write = dependencies.write || writeArchive;
 
   async function process(submission: CaptureSubmission): Promise<CaptureResult> {
+    const recovery = dependencies.recovery;
+    if (!recovery) return processArchive(submission);
+    try {
+      await recovery.ready();
+      await recovery.lease.acquire();
+    } catch (error) {
+      return { status: 'failed', reason: `Capture recovery failed: ${redactError(error)}` };
+    }
+
+    const result = await processArchive(submission);
+    try {
+      await recovery.lease.release();
+    } catch (error) {
+      if (result.status === 'failed') return result;
+      return {
+        status: 'partial',
+        archivePath: result.archivePath,
+        warnings: [
+          ...(result.status === 'partial' ? result.warnings : []),
+          `Capture lease release failed: ${redactError(error)}`,
+        ],
+      };
+    }
+    return result;
+  }
+
+  async function processArchive(submission: CaptureSubmission): Promise<CaptureResult> {
     try {
       const history = await dependencies.history.load();
       const resolution = await resolveArchivePlan(submission.document, history);

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { waitForStablePage } from '@/utils/research/observe';
+import {
+  bofaRunKey,
+  createRunController,
+  waitForStablePage,
+} from '@/utils/research/observe';
 import type { ReadinessEvidence } from '@/utils/research/types';
 
 const ready: ReadinessEvidence = {
@@ -37,5 +41,21 @@ describe('page observation', () => {
         maxAttempts: 5,
       }),
     ).resolves.toBe('auth-required');
+  });
+
+  it('cancels a stale report run and accepts recapture after same-document navigation', () => {
+    const controller = createRunController();
+    const firstKey = bofaRunKey(
+      'https://rsch.baml.com/r?q=private-report&e=private%40example.com',
+      'BOFA-1',
+    );
+    const firstGeneration = controller.start(firstKey);
+    const secondKey = bofaRunKey('https://rsch.baml.com/r?q=next-report', 'BOFA-2');
+    const secondGeneration = controller.start(secondKey);
+
+    expect(firstKey).not.toContain('private-report');
+    expect(firstKey).not.toContain('private@example.com');
+    expect(controller.isCurrent(firstGeneration, firstKey)).toBe(false);
+    expect(controller.isCurrent(secondGeneration, secondKey)).toBe(true);
   });
 });

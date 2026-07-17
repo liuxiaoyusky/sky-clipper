@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { createCaptureService } from '@/utils/research/capture-service';
+import {
+  createCaptureService,
+  createCaptureStartupRecovery,
+} from '@/utils/research/capture-service';
 import type { CaptureSubmission } from '@/utils/research/types';
 
 function submission(sourceId: string, hashChar: string): CaptureSubmission {
@@ -118,5 +121,97 @@ describe('capture service', () => {
       expect(result.warnings[0]).toContain('History update failed');
       expect(result.warnings[0]).not.toContain('rsch.baml.com');
     }
+  });
+
+  it('reconciles an abandoned session lease before starting a new capture', async () => {
+    const events: string[] = [];
+    let releaseSweep!: () => void;
+    let markSweepStarted!: () => void;
+    const sweepBlocked = new Promise<void>((resolve) => {
+      releaseSweep = resolve;
+    });
+    const sweepStarted = new Promise<void>((resolve) => {
+      markSweepStarted = resolve;
+    });
+    const recovery = createCaptureStartupRecovery({
+      session: {
+        async get() {
+          events.push('get');
+          return { fin_report_clipper_active_capture: { startedAt: '2026-07-17T16:30:00Z' } };
+        },
+        async set() {
+          events.push('set');
+        },
+        async remove() {
+          events.push('remove');
+        },
+      },
+      async sweep() {
+        events.push('sweep');
+        markSweepStarted();
+        await sweepBlocked;
+      },
+    });
+    const service = createCaptureService({
+      recovery,
+      history: {
+        async load() {
+          return [];
+        },
+        async upsert() {},
+      },
+      createIo() {
+        return { async writeText() {}, async downloadUrl() {}, async close() {} };
+      },
+      async write(plan) {
+        events.push('write');
+        return { status: 'complete' as const, warnings: [], files: [plan.originalMarkdownPath] };
+      },
+    });
+
+    await sweepStarted;
+    const result = service.submit(submission('BOFA-1', 'a'));
+    await Promise.resolve();
+    expect(events).toEqual(['get', 'sweep']);
+    releaseSweep();
+    await expect(result).resolves.toMatchObject({ status: 'saved' });
+    expect(events).toEqual(['get', 'sweep', 'remove', 'set', 'write', 'remove']);
+  });
+
+  it('returns a redacted recovery failure without starting archive IO', async () => {
+    const recovery = createCaptureStartupRecovery({
+      session: {
+        async get() {
+          return {};
+        },
+        async set() {},
+        async remove() {},
+      },
+      async sweep() {
+        throw new Error('sweep failed at https://rsch.baml.com/r?token=private-token');
+      },
+    });
+    let ioCreated = false;
+    const service = createCaptureService({
+      recovery,
+      history: {
+        async load() {
+          return [];
+        },
+        async upsert() {},
+      },
+      createIo() {
+        ioCreated = true;
+        throw new Error('must not create IO');
+      },
+    });
+
+    const result = await service.submit(submission('BOFA-1', 'a'));
+    expect(result.status).toBe('failed');
+    if (result.status === 'failed') {
+      expect(result.reason).toContain('Capture recovery failed');
+      expect(result.reason).not.toContain('rsch.baml.com');
+    }
+    expect(ioCreated).toBe(false);
   });
 });

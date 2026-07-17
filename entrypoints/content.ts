@@ -4,7 +4,7 @@ import {
   type CaptureRequest,
   type GetPageStatusResponse,
 } from '@/utils/research/messages';
-import { waitForStablePage } from '@/utils/research/observe';
+import { bofaRunKey, createRunController, waitForStablePage } from '@/utils/research/observe';
 import { redactError } from '@/utils/research/privacy';
 import {
   isBofaAutoCaptureEnabled,
@@ -20,7 +20,8 @@ export default defineContentScript({
   matches: ['https://rsch.baml.com/*'],
   runAt: 'document_idle',
   main() {
-    let generation = 0;
+    const runs = createRunController();
+    let activeKey = '';
     let status: PageStatus = {
       code: 'observing',
       message: '正在识别当前研报页面',
@@ -53,9 +54,18 @@ export default defineContentScript({
       }
     };
 
-    const run = async (runGeneration: number) => {
+    const readRunKey = () => bofaRunKey(location.href, bofaAdapter.getSourceId(document) || undefined);
+    let restartCurrentRun = () => {};
+    const isCurrent = (runGeneration: number, runKey: string) => {
+      if (!runs.isCurrent(runGeneration, runKey)) return false;
+      if (readRunKey() === runKey) return true;
+      restartCurrentRun();
+      return false;
+    };
+
+    const run = async (runGeneration: number, runKey: string) => {
       const settings = await loadResearchSettings();
-      if (runGeneration !== generation) return;
+      if (!isCurrent(runGeneration, runKey)) return;
       if (!isBofaAutoCaptureEnabled(settings)) {
         setStatus('disabled', '自动捕获或 BofA 支持已关闭');
         return;
@@ -75,9 +85,9 @@ export default defineContentScript({
       const readiness = await waitForStablePage({
         probe: () => bofaAdapter.readinessEvidence(document, new URL(location.href)),
         sleep,
-        shouldContinue: () => runGeneration === generation,
+        shouldContinue: () => isCurrent(runGeneration, runKey),
       });
-      if (runGeneration !== generation || readiness === 'cancelled') return;
+      if (!isCurrent(runGeneration, runKey) || readiness === 'cancelled') return;
       if (readiness === 'auth-required') {
         setStatus('needs-action', '页面需要登录、验证或人工处理');
         return;
@@ -88,12 +98,13 @@ export default defineContentScript({
       }
 
       setStatus('extracting', '正在转换原始研报正文');
+      if (!isCurrent(runGeneration, runKey)) return;
       const submission = await bofaAdapter.extractOriginal(
         document,
         location.href,
         new Date().toISOString(),
       );
-      if (runGeneration !== generation) return;
+      if (!isCurrent(runGeneration, runKey)) return;
       setStatus('saving', '正在写入 Downloads 研报归档', {
         title: submission.document.title,
       });
@@ -102,18 +113,27 @@ export default defineContentScript({
         type: 'FIN_REPORT_CLIPPER_CAPTURE',
         submission,
       };
+      if (!isCurrent(runGeneration, runKey)) return;
       const result = (await chrome.runtime.sendMessage(request)) as CaptureResult;
-      if (runGeneration === generation) applyResult(result, submission.document.title);
+      if (isCurrent(runGeneration, runKey)) applyResult(result, submission.document.title);
     };
 
-    const safelyRun = async (runGeneration: number) => {
+    const safelyRun = async (runGeneration: number, runKey: string) => {
       try {
-        await run(runGeneration);
+        await run(runGeneration, runKey);
       } catch (error) {
-        if (runGeneration === generation) {
+        if (isCurrent(runGeneration, runKey)) {
           setStatus('failed', `保存失败：${redactError(error)}`);
         }
       }
+    };
+
+    restartCurrentRun = () => {
+      const nextKey = readRunKey();
+      if (nextKey === activeKey) return;
+      activeKey = nextKey;
+      const runGeneration = runs.start(nextKey);
+      void safelyRun(runGeneration, nextKey);
     };
 
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -124,11 +144,21 @@ export default defineContentScript({
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local' || !changes[RESEARCH_SETTINGS_KEY]) return;
-      generation += 1;
-      void safelyRun(generation);
+      activeKey = '';
+      restartCurrentRun();
     });
 
-    generation += 1;
-    void safelyRun(generation);
+    for (const method of ['pushState', 'replaceState'] as const) {
+      const original = history[method] as History['pushState'];
+      history[method] = ((...args: Parameters<History['pushState']>) => {
+        const result = original.apply(history, args);
+        queueMicrotask(restartCurrentRun);
+        return result;
+      }) as History['pushState'];
+    }
+    window.addEventListener('popstate', restartCurrentRun);
+    window.addEventListener('hashchange', restartCurrentRun);
+
+    restartCurrentRun();
   },
 });

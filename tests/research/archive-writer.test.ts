@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { writeArchive, type ArchiveIo } from '@/utils/research/archive-writer';
 import { createChromeArchiveIo } from '@/utils/research/chrome-archive-io';
 import {
+  isBofaCaptureSender,
   isCaptureRequest,
   isGetPageStatusRequest,
 } from '@/utils/research/messages';
@@ -76,6 +77,63 @@ describe('archive writer', () => {
       }),
     ).toBe(true);
     expect(isGetPageStatusRequest({ target: 'background' })).toBe(false);
+  });
+
+  it('rejects forged BofA senders and polluted capture submissions', () => {
+    const request = {
+      target: 'background' as const,
+      type: 'FIN_REPORT_CLIPPER_CAPTURE' as const,
+      submission,
+    };
+    const trustedSender = {
+      id: 'extension-id',
+      frameId: 0,
+      url: 'https://rsch.baml.com/r?q=private-report',
+      tab: { url: 'https://rsch.baml.com/r?q=private-report' },
+    } as chrome.runtime.MessageSender;
+
+    expect(isCaptureRequest(request)).toBe(true);
+    expect(isBofaCaptureSender(trustedSender, 'extension-id')).toBe(true);
+    expect(isBofaCaptureSender({ ...trustedSender, frameId: 1 }, 'extension-id')).toBe(false);
+    expect(
+      isBofaCaptureSender(
+        { ...trustedSender, tab: { url: 'https://example.com/r' } } as chrome.runtime.MessageSender,
+        'extension-id',
+      ),
+    ).toBe(false);
+    expect(
+      isCaptureRequest({
+        ...request,
+        submission: { ...submission, rawUrl: 'https://rsch.baml.com/r?token=private-token' },
+      }),
+    ).toBe(false);
+    expect(
+      isCaptureRequest({
+        ...request,
+        submission: {
+          ...submission,
+          document: { ...submission.document, pdfUrl: 'https://rsch.baml.com/r?token=private-token' },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isCaptureRequest({
+        ...request,
+        submission: { ...submission, transientPdfUrl: 'https://example.com/report.pdf' },
+      }),
+    ).toBe(false);
+    expect(
+      isCaptureRequest({
+        ...request,
+        submission: {
+          ...submission,
+          document: {
+            ...submission.document,
+            sanitizedSource: 'https://rsch.baml.com/r?token=private-token',
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it('writes a Markdown safety snapshot, saves PDF, promotes Markdown, then writes capture.json', async () => {

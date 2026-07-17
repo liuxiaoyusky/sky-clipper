@@ -1,4 +1,5 @@
 import { StableReadinessTracker } from './adapters/types';
+import { canonicalizeBofaUrl, sanitizeTextContent } from './privacy';
 import type { ReadinessEvidence } from './types';
 
 export interface StablePageOptions {
@@ -7,6 +8,32 @@ export interface StablePageOptions {
   shouldContinue(): boolean;
   maxAttempts?: number;
   intervalMs?: number;
+}
+
+export interface RunController {
+  start(key: string): number;
+  isCurrent(generation: number, key: string): boolean;
+}
+
+export function bofaRunKey(rawUrl: string, sourceId?: string): string {
+  const canonical = canonicalizeBofaUrl(rawUrl).sanitized;
+  const safeSourceId = sourceId ? sanitizeTextContent(sourceId, rawUrl).slice(0, 256) : '';
+  return `bofa:${canonical}|${safeSourceId}`;
+}
+
+export function createRunController(): RunController {
+  let generation = 0;
+  let key = '';
+  return {
+    start(nextKey) {
+      key = nextKey;
+      generation += 1;
+      return generation;
+    },
+    isCurrent(runGeneration, runKey) {
+      return generation === runGeneration && key === runKey;
+    },
+  };
 }
 
 export async function waitForStablePage(
