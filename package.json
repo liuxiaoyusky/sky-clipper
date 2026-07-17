@@ -31,7 +31,8 @@
     "jsdom": "^29.1.1",
     "typescript": "^5.7.2",
     "vitest": "^4.1.10",
-    "wxt": "^0.19.13"
+    "wxt": "^0.19.13",
+    "yaml": "2.4.2"
   },
   "overrides": {
     "shell-quote": "1.8.4",

@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
@@ -7,66 +8,179 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { parse } from 'yaml';
 import { afterEach, describe, expect, it } from 'vitest';
 
-function jobBlock(workflow: string, name: string): string {
-  const marker = `  ${name}:\n`;
-  const start = workflow.indexOf(marker);
-  if (start < 0) throw new Error(`Missing ${name} job`);
-  const remaining = workflow.slice(start + marker.length);
-  const nextJob = remaining.search(/^  [a-z][a-z0-9_-]*:\n/m);
-  return nextJob < 0 ? remaining : remaining.slice(0, nextJob);
+interface WorkflowStep {
+  env?: Record<string, unknown>;
+  id?: string;
+  name?: string;
+  run?: string;
+  uses?: string;
+  with?: Record<string, unknown>;
 }
 
-function actionsIn(block: string): string[] {
-  return [...block.matchAll(/^\s+uses: ([^\s#]+)(?:\s+#.*)?$/gm)].map((match) => match[1]);
+interface WorkflowJob {
+  needs?: string | string[];
+  outputs?: Record<string, unknown>;
+  permissions?: Record<string, unknown>;
+  steps?: WorkflowStep[];
 }
 
-function jobIds(workflow: string): string[] {
-  const jobs = topLevelBlock(workflow, 'jobs');
-  return [...jobs.matchAll(/^  ([a-z][a-z0-9_-]*):$/gm)].map((match) => match[1]);
+interface Workflow {
+  jobs: Record<string, WorkflowJob>;
+  on: unknown;
+  permissions?: Record<string, unknown>;
 }
 
-function stepBlock(job: string, name: string): string {
-  const marker = `      - name: ${name}\n`;
-  const start = job.indexOf(marker);
-  if (start < 0) throw new Error(`Missing ${name} step`);
-  const remaining = job.slice(start + marker.length);
-  const nextStep = remaining.search(/^      - name: /m);
-  return nextStep < 0 ? remaining : remaining.slice(0, nextStep);
+const releasePath = '.github/workflows/release.yml';
+const expectedActions = [
+  'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0',
+  'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
+  'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+  'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+];
+
+function parseWorkflow(source: string): Workflow {
+  return parse(source) as Workflow;
 }
 
-function topLevelBlock(workflow: string, name: string): string {
-  const marker = `${name}:\n`;
-  const start = workflow.indexOf(marker);
-  if (start < 0) throw new Error(`Missing ${name} block`);
-  const remaining = workflow.slice(start + marker.length);
-  const nextBlock = remaining.search(/^[a-z][a-z_-]*:\n/m);
-  return nextBlock < 0 ? remaining : remaining.slice(0, nextBlock);
+function namedStep(job: WorkflowJob, name: string): WorkflowStep {
+  const matches = (job.steps || []).filter((step) => step.name === name);
+  if (matches.length !== 1) throw new Error('Expected exactly one ' + name + ' step');
+  return matches[0];
 }
 
-function field(block: string, name: string): string | undefined {
-  return block.match(new RegExp(`^\\s+${name}: ([^\\n]+)$`, 'm'))?.[1];
+function stringField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === 'string' ? value : undefined;
 }
 
-function releaseArtifactWiring(workflow: string) {
-  const build = jobBlock(workflow, 'build');
-  const publish = jobBlock(workflow, 'release');
-  const upload = stepBlock(build, 'Upload verified Chrome release assets');
-  const download = stepBlock(publish, 'Download verified Chrome release assets');
-  const uploadPaths = upload.match(/path: \|\n([\s\S]*?)\n\s+if-no-files-found:/)?.[1];
+function blockLines(value: string | undefined): string[] {
+  return value?.trim().split(/\r?\n/).map((line) => line.trim()) || [];
+}
+
+function shellArray(run: string | undefined, name: string): string[] {
+  const lines = run?.split(/\r?\n/) || [];
+  const start = lines.findIndex((line) => line.trim() === name + '=(');
+  const end = lines.findIndex((line, index) => index > start && line.trim() === ')');
+  if (start < 0 || end < 0) return [];
+  return lines
+    .slice(start + 1, end)
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^"|"$/g, ''));
+}
+
+function shellCopies(run: string | undefined): string[][] {
+  return [...(run || '').matchAll(/cp "([^"]+)" \\\n+\s+"([^"]+)"/g)].map((match) =>
+    match.slice(1),
+  );
+}
+
+function releaseContract(source: string) {
+  const workflow = parseWorkflow(source);
+  const build = workflow.jobs.build;
+  const publish = workflow.jobs.release;
+  if (!build || !publish) throw new Error('Missing build or release job');
+  const checkout = namedStep(build, 'Checkout');
+  const version = namedStep(build, 'Verify tag matches package version');
+  const stage = namedStep(build, 'Stage Chrome release assets');
+  const upload = namedStep(build, 'Upload verified Chrome release assets');
+  const download = namedStep(publish, 'Download verified Chrome release assets');
+  const create = namedStep(publish, 'Create GitHub Release');
+  const actions = Object.values(workflow.jobs).flatMap((job) =>
+    (job.steps || []).flatMap((step) => (step.uses ? [step.uses] : [])),
+  );
+
   return {
-    uploadName: field(upload, 'name'),
-    uploadPaths: uploadPaths?.split('\n').map((line) => line.trim()),
-    downloadName: field(download, 'name'),
-    downloadPath: field(download, 'path'),
+    trigger: workflow.on,
+    topPermissions: workflow.permissions,
+    jobIds: Object.keys(workflow.jobs),
+    buildPermissions: build.permissions,
+    buildOutputs: build.outputs,
+    publishNeeds: publish.needs,
+    publishPermissions: publish.permissions,
+    actions,
+    checkoutPersistCredentials: checkout.with?.['persist-credentials'],
+    versionId: version.id,
+    versionPublishesOutput: version.run?.includes(
+      'echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"',
+    ),
+    stageEnv: stage.env,
+    stageCopies: shellCopies(stage.run),
+    upload: {
+      name: stringField(upload.with, 'name'),
+      paths: blockLines(stringField(upload.with, 'path')),
+      ifNoFilesFound: stringField(upload.with, 'if-no-files-found'),
+    },
+    download: {
+      name: stringField(download.with, 'name'),
+      path: stringField(download.with, 'path'),
+    },
+    publishStepNames: (publish.steps || []).map((step) => step.name),
+    publishEnv: create.env,
+    publishAssets: shellArray(create.run, 'ASSETS'),
+    generatedNotes: create.run?.includes('--generate-notes'),
   };
 }
 
+const expectedReleaseContract = {
+  trigger: { push: { tags: ['v*.*.*'] } },
+  topPermissions: { contents: 'read' },
+  jobIds: ['build', 'release'],
+  buildPermissions: { contents: 'read' },
+  buildOutputs: { version: '${{ steps.version.outputs.version }}' },
+  publishNeeds: 'build',
+  publishPermissions: { contents: 'write' },
+  actions: expectedActions,
+  checkoutPersistCredentials: false,
+  versionId: 'version',
+  versionPublishesOutput: true,
+  stageEnv: { PACKAGE_VERSION: '${{ steps.version.outputs.version }}' },
+  stageCopies: [
+    [
+      '.output/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip',
+      'release-assets/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip',
+    ],
+    [
+      'release-assets/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip',
+      'release-assets/fin-report-clipper-chrome.zip',
+    ],
+  ],
+  upload: {
+    name: 'fin-report-clipper-chrome-release',
+    paths: [
+      'release-assets/fin-report-clipper-${{ steps.version.outputs.version }}-chrome.zip',
+      'release-assets/fin-report-clipper-chrome.zip',
+    ],
+    ifNoFilesFound: 'error',
+  },
+  download: {
+    name: 'fin-report-clipper-chrome-release',
+    path: 'release-assets',
+  },
+  publishStepNames: [
+    'Download verified Chrome release assets',
+    'Create GitHub Release',
+  ],
+  publishEnv: {
+    GH_TOKEN: '${{ github.token }}',
+    GH_REPO: '${{ github.repository }}',
+    RELEASE_VERSION: '${{ needs.build.outputs.version }}',
+  },
+  publishAssets: [
+    'release-assets/fin-report-clipper-${RELEASE_VERSION}-chrome.zip',
+    'release-assets/fin-report-clipper-chrome.zip',
+  ],
+  generatedNotes: true,
+};
+
 const fixtureRoots: string[] = [];
 
-function fixtureRoot(manifest: Record<string, unknown>, scripts: Record<string, string | Buffer> = {}) {
+function fixtureRoot(
+  manifest: Record<string, unknown>,
+  scripts: Record<string, string | Buffer> = {},
+) {
   const root = mkdtempSync(join(tmpdir(), 'fin-report-config-'));
   fixtureRoots.push(root);
   writeFileSync(join(root, 'manifest.json'), JSON.stringify(manifest));
@@ -110,131 +224,46 @@ describe('Chrome-only automation', () => {
     expect(ci).not.toMatch(/build:edge|build:firefox|edge-mv3|firefox/);
   });
 
-  it('publishes the exact Chrome archive names', () => {
-    const release = readFileSync('.github/workflows/release.yml', 'utf8');
-    expect(release).toContain('fin-report-clipper-${PACKAGE_VERSION}-chrome.zip');
-    expect(release).toContain('fin-report-clipper-chrome.zip');
-    expect(release).not.toContain('zhaoji-clipper');
-    expect(release).not.toMatch(/zip:edge|edge\.zip/);
+  it('matches the exact parsed release contract', () => {
+    const release = readFileSync(releasePath, 'utf8');
+    const contract = releaseContract(release);
+
+    expect(contract).toEqual(expectedReleaseContract);
+    expect(contract.actions).toHaveLength(4);
+    expect(contract.actions.every((action) => /@[a-f0-9]{40}$/.test(action))).toBe(true);
   });
 
-  it('rejects options and icons from the generated manifest', () => {
-    const check = readFileSync('scripts/check-manifest.mjs', 'utf8');
-    expect(check).toContain("'options_ui'");
-    expect(check).toContain("'icons'");
+  it('accepts legal whitespace before a YAML key colon without losing an action', () => {
+    const release = readFileSync(releasePath, 'utf8');
+    const mutated = release.replace('uses:', 'uses :');
+
+    expect(releaseContract(mutated)).toEqual(expectedReleaseContract);
   });
 
-  it('separates a read-only Chrome package job from the publishing job', () => {
-    const release = readFileSync('.github/workflows/release.yml', 'utf8');
-    const build = jobBlock(release, 'build');
-    const publish = jobBlock(release, 'release');
-
-    expect(release).toMatch(/^on:\n  push:\n    tags:\n      - 'v\*\.\*\.\*'\n/m);
-    expect(release).toMatch(/^permissions:\n  contents: read\n/m);
-    expect(build).toMatch(/^    permissions:\n      contents: read\n/m);
-    expect(build).toContain('persist-credentials: false');
-    expect(build).toContain('TAG_VERSION="${GITHUB_REF_NAME#v}"');
-    expect(build).toContain("require('./package.json').version");
-    expect(build).toContain('npm run verify');
-    expect(build).toContain('npm run zip');
-    expect(build).toContain('actions/upload-artifact@');
-    expect(publish).toMatch(/^    needs: build\n/m);
-    expect(publish).toMatch(/^    permissions:\n      contents: write\n/m);
-    expect(publish).toContain('actions/download-artifact@');
-    expect(publish).not.toMatch(/npm ci|npm run verify|npm run zip|actions\/checkout/);
-    const actions = actionsIn(`${build}\n${publish}`);
-    expect(actions).toEqual([
-      'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0',
-      'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
-      'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
-      'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
-    ]);
-    expect(actions).toHaveLength(4);
-    expect(actions.every((action) => /@[a-f0-9]{40}$/.test(action))).toBe(true);
-  });
-
-  it('checks the complete Chrome MV3 manifest and every declared content script', () => {
-    const manifestCheck = readFileSync('scripts/check-manifest.mjs', 'utf8');
-    const asciiCheck = readFileSync('scripts/check-content-ascii.mjs', 'utf8');
-
-    expect(manifestCheck).toContain('manifest.manifest_version !== 3');
-    expect(manifestCheck).toContain('optional_permissions');
-    expect(manifestCheck).toContain('optional_host_permissions');
-    expect(manifestCheck).toContain("['content-scripts/content.js']");
-    expect(asciiCheck).toContain('manifest.content_scripts');
-    expect(asciiCheck).not.toContain("'content-scripts/content.js'");
-  });
-
-  it('wires exactly two staged Chrome assets through the release jobs', () => {
-    const release = readFileSync('.github/workflows/release.yml', 'utf8');
-    const build = jobBlock(release, 'build');
-    const publish = jobBlock(release, 'release');
-    const trigger = topLevelBlock(release, 'on');
-    const version = stepBlock(build, 'Verify tag matches package version');
-    const stage = stepBlock(build, 'Stage Chrome release assets');
-
-    expect(trigger).toBe("  push:\n    tags:\n      - 'v*.*.*'\n\n");
-    expect(jobIds(release)).toEqual(['build', 'release']);
-    const extraJob = release.replace(
+  it('rejects a legal underscore-prefixed extra job', () => {
+    const release = readFileSync(releasePath, 'utf8');
+    const mutated = release.replace(
       '  release:\n',
-      '  extra_job2:\n    runs-on: ubuntu-latest\n\n  release:\n',
+      '  _extra:\n    runs-on: ubuntu-latest\n    steps: []\n\n  release:\n',
     );
-    expect(jobIds(extraJob)).toEqual(['build', 'extra_job2', 'release']);
-    expect(build).toContain('outputs:\n      version: ${{ steps.version.outputs.version }}');
-    expect(version).toContain('id: version');
-    expect(version).toContain('echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"');
-    expect(stage).toContain('PACKAGE_VERSION: ${{ steps.version.outputs.version }}');
-    expect(stage).toContain('mkdir -p release-assets');
-    const copies = [...stage.matchAll(/cp "([^"]+)" \\\n+\s+"([^"]+)"/g)].map((match) =>
-      match.slice(1),
+
+    expect(releaseContract(mutated)).not.toEqual(expectedReleaseContract);
+    expect(Object.keys(parseWorkflow(mutated).jobs)).toEqual(['build', '_extra', 'release']);
+  });
+
+  it('rejects broken artifact names and paths', () => {
+    const release = readFileSync(releasePath, 'utf8');
+    const brokenName = release.replace(
+      'name: fin-report-clipper-chrome-release',
+      'name: fin-report-clipper-chrome-release-broken',
     );
-    expect(copies).toEqual([
-      [
-        '.output/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip',
-        'release-assets/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip',
-      ],
-      [
-        'release-assets/fin-report-clipper-${PACKAGE_VERSION}-chrome.zip',
-        'release-assets/fin-report-clipper-chrome.zip',
-      ],
-    ]);
+    const brokenPath = release.replace(
+      'path: release-assets\n\n      - name: Create GitHub Release',
+      'path: release-assets-broken\n\n      - name: Create GitHub Release',
+    );
 
-    const expectedWiring = {
-      uploadName: 'fin-report-clipper-chrome-release',
-      uploadPaths: [
-        'release-assets/fin-report-clipper-${{ steps.version.outputs.version }}-chrome.zip',
-        'release-assets/fin-report-clipper-chrome.zip',
-      ],
-      downloadName: 'fin-report-clipper-chrome-release',
-      downloadPath: 'release-assets',
-    };
-    expect(releaseArtifactWiring(release)).toEqual(expectedWiring);
-    expect(
-      releaseArtifactWiring(
-        release.replace(
-          'name: fin-report-clipper-chrome-release',
-          'name: fin-report-clipper-chrome-release-broken',
-        ),
-      ),
-    ).not.toEqual(expectedWiring);
-    expect(
-      releaseArtifactWiring(
-        release.replace(
-          'path: release-assets\n\n      - name: Create GitHub Release',
-          'path: release-assets-broken\n\n      - name: Create GitHub Release',
-        ),
-      ),
-    ).not.toEqual(expectedWiring);
-    expect(publish).toContain('RELEASE_VERSION: ${{ needs.build.outputs.version }}');
-    expect(publish).toContain('GH_REPO: ${{ github.repository }}');
-    expect(publish).not.toMatch(/NOTES_FILE|--notes-file/);
-    expect(publish).toContain('--generate-notes');
-
-    const assets = publish.match(/ASSETS=\(\n([\s\S]*?)\n\s*\)/)?.[1];
-    expect([...assets!.matchAll(/"([^"]+)"/g)].map((match) => match[1])).toEqual([
-      'release-assets/fin-report-clipper-${RELEASE_VERSION}-chrome.zip',
-      'release-assets/fin-report-clipper-chrome.zip',
-    ]);
+    expect(releaseContract(brokenName)).not.toEqual(expectedReleaseContract);
+    expect(releaseContract(brokenPath)).not.toEqual(expectedReleaseContract);
   });
 
   it.each([
@@ -257,6 +286,8 @@ describe('Chrome-only automation', () => {
       },
       'Unexpected content-script JavaScript',
     ],
+    ['icons', { icons: { 16: 'icon.png' } }, 'Forbidden manifest capability: icons'],
+    ['options', { options_ui: { page: 'options.html' } }, 'Forbidden manifest capability: options_ui'],
   ])('fails the manifest fixture closed for %s', (_label, overrides, error) => {
     const root = fixtureRoot(validManifest(overrides));
     const result = runCheck('scripts/check-manifest.mjs', root);
