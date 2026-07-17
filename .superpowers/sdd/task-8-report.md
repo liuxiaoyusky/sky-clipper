@@ -179,3 +179,53 @@ The staging directory contains only ignored local zip artifacts created for vali
 artifact upload, release, or push was executed. The structure test rejects extra top-level triggers
 and mismatched artifact wiring, while fixture tests execute both CLI scripts against isolated temp
 trees. A real GitHub artifact round-trip and tag permission check remain Task 9 acceptance work.
+
+## Review 3 follow-up: explicit GitHub repository and non-vacuous structure checks
+
+### RED
+
+Strengthened the workflow parser before changing release automation:
+
+- `uses:` parsing now accepts trailing version comments, then asserts the exact four-action set,
+  exact count, and a 40-hex SHA for every action;
+- job IDs accept digits, underscores, and hyphens, with an injected `extra_job2` proving the parser
+  cannot hide a legal extra job;
+- upload/download artifact fields are extracted and compared by exact values, with `-broken` name
+  and path mutations proving mismatches are observed;
+- the release step must expose an explicit GitHub repository context.
+
+```sh
+npm test -- tests/research/release-config.test.ts
+```
+
+Result: FAIL as expected — the corrected action and artifact parsers passed their positive and
+negative assertions, while the real workflow failed because its release step had no `GH_REPO`.
+
+### GREEN
+
+Added `GH_REPO: ${{ github.repository }}` to the release step environment. Both `gh release view`
+and `gh release create` now resolve the intended repository without a checkout or git remote. No
+additional permissions, commands, triggers, or assets were introduced.
+
+Final verification:
+
+```sh
+npm test -- tests/research/release-config.test.ts
+# PASS: 1 file, 11 tests
+npm run verify
+# PASS: 15 files, 89 tests; compile, Chrome build, manifest, and ASCII checks
+npm run zip
+# PASS: .output/fin-report-clipper-0.1.0-chrome.zip
+```
+
+Local staging again contains exactly the versioned zip and stable alias. The source and both staged
+files share SHA-256
+`d6cee196c6564a03395b3b17748edb49205194f52680c540506cca4b7c41d569`. Action scans show the
+expected SHA-pinned lines, repository/wiring scans match the release step, and `git diff --check`
+passes.
+
+## Review 3 self-review
+
+The production change is one environment entry; the larger test diff removes vacuous assertions
+and proves its mutation guards. No release, push, or remote artifact upload was executed. A live
+tag-triggered GitHub run remains Task 9's acceptance boundary.

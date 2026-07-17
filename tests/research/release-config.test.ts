@@ -15,12 +15,17 @@ function jobBlock(workflow: string, name: string): string {
   const start = workflow.indexOf(marker);
   if (start < 0) throw new Error(`Missing ${name} job`);
   const remaining = workflow.slice(start + marker.length);
-  const nextJob = remaining.search(/^  [a-z][a-z-]*:\n/m);
+  const nextJob = remaining.search(/^  [a-z][a-z0-9_-]*:\n/m);
   return nextJob < 0 ? remaining : remaining.slice(0, nextJob);
 }
 
 function actionsIn(block: string): string[] {
-  return [...block.matchAll(/^\s+uses: (\S+)$/gm)].map((match) => match[1]);
+  return [...block.matchAll(/^\s+uses: ([^\s#]+)(?:\s+#.*)?$/gm)].map((match) => match[1]);
+}
+
+function jobIds(workflow: string): string[] {
+  const jobs = topLevelBlock(workflow, 'jobs');
+  return [...jobs.matchAll(/^  ([a-z][a-z0-9_-]*):$/gm)].map((match) => match[1]);
 }
 
 function stepBlock(job: string, name: string): string {
@@ -39,6 +44,24 @@ function topLevelBlock(workflow: string, name: string): string {
   const remaining = workflow.slice(start + marker.length);
   const nextBlock = remaining.search(/^[a-z][a-z_-]*:\n/m);
   return nextBlock < 0 ? remaining : remaining.slice(0, nextBlock);
+}
+
+function field(block: string, name: string): string | undefined {
+  return block.match(new RegExp(`^\\s+${name}: ([^\\n]+)$`, 'm'))?.[1];
+}
+
+function releaseArtifactWiring(workflow: string) {
+  const build = jobBlock(workflow, 'build');
+  const publish = jobBlock(workflow, 'release');
+  const upload = stepBlock(build, 'Upload verified Chrome release assets');
+  const download = stepBlock(publish, 'Download verified Chrome release assets');
+  const uploadPaths = upload.match(/path: \|\n([\s\S]*?)\n\s+if-no-files-found:/)?.[1];
+  return {
+    uploadName: field(upload, 'name'),
+    uploadPaths: uploadPaths?.split('\n').map((line) => line.trim()),
+    downloadName: field(download, 'name'),
+    downloadPath: field(download, 'path'),
+  };
 }
 
 const fixtureRoots: string[] = [];
@@ -119,10 +142,15 @@ describe('Chrome-only automation', () => {
     expect(publish).toMatch(/^    permissions:\n      contents: write\n/m);
     expect(publish).toContain('actions/download-artifact@');
     expect(publish).not.toMatch(/npm ci|npm run verify|npm run zip|actions\/checkout/);
-    expect(actionsIn(`${build}\n${publish}`)).toSatisfy((actions) =>
-      actions.every((action: string) => /@[a-f0-9]{40}$/.test(action)),
-    );
-
+    const actions = actionsIn(`${build}\n${publish}`);
+    expect(actions).toEqual([
+      'actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0',
+      'actions/setup-node@820762786026740c76f36085b0efc47a31fe5020',
+      'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+      'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093',
+    ]);
+    expect(actions).toHaveLength(4);
+    expect(actions.every((action) => /@[a-f0-9]{40}$/.test(action))).toBe(true);
   });
 
   it('checks the complete Chrome MV3 manifest and every declared content script', () => {
@@ -142,17 +170,16 @@ describe('Chrome-only automation', () => {
     const build = jobBlock(release, 'build');
     const publish = jobBlock(release, 'release');
     const trigger = topLevelBlock(release, 'on');
-    const jobs = topLevelBlock(release, 'jobs');
     const version = stepBlock(build, 'Verify tag matches package version');
     const stage = stepBlock(build, 'Stage Chrome release assets');
-    const upload = stepBlock(build, 'Upload verified Chrome release assets');
-    const download = stepBlock(publish, 'Download verified Chrome release assets');
 
     expect(trigger).toBe("  push:\n    tags:\n      - 'v*.*.*'\n\n");
-    expect([...jobs.matchAll(/^  ([a-z][a-z-]*):$/gm)].map((match) => match[1])).toEqual([
-      'build',
-      'release',
-    ]);
+    expect(jobIds(release)).toEqual(['build', 'release']);
+    const extraJob = release.replace(
+      '  release:\n',
+      '  extra_job2:\n    runs-on: ubuntu-latest\n\n  release:\n',
+    );
+    expect(jobIds(extraJob)).toEqual(['build', 'extra_job2', 'release']);
     expect(build).toContain('outputs:\n      version: ${{ steps.version.outputs.version }}');
     expect(version).toContain('id: version');
     expect(version).toContain('echo "version=$PACKAGE_VERSION" >> "$GITHUB_OUTPUT"');
@@ -172,15 +199,34 @@ describe('Chrome-only automation', () => {
       ],
     ]);
 
-    const uploadPaths = upload.match(/path: \|\n([\s\S]*?)\n\s+if-no-files-found:/)?.[1];
-    expect(upload).toContain('name: fin-report-clipper-chrome-release');
-    expect(uploadPaths?.split('\n').map((line) => line.trim())).toEqual([
-      'release-assets/fin-report-clipper-${{ steps.version.outputs.version }}-chrome.zip',
-      'release-assets/fin-report-clipper-chrome.zip',
-    ]);
-    expect(download).toContain('name: fin-report-clipper-chrome-release');
-    expect(download).toContain('path: release-assets');
+    const expectedWiring = {
+      uploadName: 'fin-report-clipper-chrome-release',
+      uploadPaths: [
+        'release-assets/fin-report-clipper-${{ steps.version.outputs.version }}-chrome.zip',
+        'release-assets/fin-report-clipper-chrome.zip',
+      ],
+      downloadName: 'fin-report-clipper-chrome-release',
+      downloadPath: 'release-assets',
+    };
+    expect(releaseArtifactWiring(release)).toEqual(expectedWiring);
+    expect(
+      releaseArtifactWiring(
+        release.replace(
+          'name: fin-report-clipper-chrome-release',
+          'name: fin-report-clipper-chrome-release-broken',
+        ),
+      ),
+    ).not.toEqual(expectedWiring);
+    expect(
+      releaseArtifactWiring(
+        release.replace(
+          'path: release-assets\n\n      - name: Create GitHub Release',
+          'path: release-assets-broken\n\n      - name: Create GitHub Release',
+        ),
+      ),
+    ).not.toEqual(expectedWiring);
     expect(publish).toContain('RELEASE_VERSION: ${{ needs.build.outputs.version }}');
+    expect(publish).toContain('GH_REPO: ${{ github.repository }}');
     expect(publish).not.toMatch(/NOTES_FILE|--notes-file/);
     expect(publish).toContain('--generate-notes');
 
