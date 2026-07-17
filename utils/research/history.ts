@@ -28,24 +28,39 @@ function isSafeArchivePath(value: string): boolean {
   );
 }
 
-function isHistoryEntry(value: unknown): value is CaptureHistoryEntry {
-  if (!value || typeof value !== 'object') return false;
+function normalizeHistoryEntry(value: unknown): CaptureHistoryEntry | undefined {
+  if (!value || typeof value !== 'object') return undefined;
   const item = value as Record<string, unknown>;
-  return (
-    typeof item.identityKey === 'string' &&
-    isSafeIdentityKey(item.identityKey) &&
-    typeof item.contentHash === 'string' &&
-    /^sha256:[a-f0-9]{64}$/.test(item.contentHash) &&
-    typeof item.archivePath === 'string' &&
-    isSafeArchivePath(item.archivePath) &&
-    (item.status === 'complete' || item.status === 'partial') &&
-    typeof item.capturedAt === 'string' &&
-    !Number.isNaN(Date.parse(item.capturedAt))
-  );
+  const { archivePath, capturedAt, contentHash, identityKey, status } = item;
+  if (
+    typeof identityKey !== 'string' ||
+    !isSafeIdentityKey(identityKey) ||
+    typeof contentHash !== 'string' ||
+    !/^sha256:[a-f0-9]{64}$/.test(contentHash) ||
+    typeof archivePath !== 'string' ||
+    !isSafeArchivePath(archivePath) ||
+    (status !== 'complete' && status !== 'partial') ||
+    typeof capturedAt !== 'string' ||
+    Number.isNaN(Date.parse(capturedAt))
+  ) {
+    return undefined;
+  }
+  return {
+    identityKey,
+    contentHash,
+    archivePath,
+    status,
+    capturedAt,
+  };
 }
 
 export function normalizeHistory(value: unknown): CaptureHistoryEntry[] {
-  return Array.isArray(value) ? value.filter(isHistoryEntry) : [];
+  return Array.isArray(value)
+    ? value.flatMap((item) => {
+        const entry = normalizeHistoryEntry(item);
+        return entry ? [entry] : [];
+      })
+    : [];
 }
 
 export function createHistoryRepository(
@@ -58,13 +73,15 @@ export function createHistoryRepository(
   return {
     load,
     async upsert(entry) {
-      if (!isHistoryEntry(entry)) throw new Error('Invalid capture history entry');
+      const normalizedEntry = normalizeHistory([entry])[0];
+      if (!normalizedEntry) throw new Error('Invalid capture history entry');
       const current = await load();
       const next = current.filter(
         (item) =>
-          item.identityKey !== entry.identityKey || item.contentHash !== entry.contentHash,
+          item.identityKey !== normalizedEntry.identityKey ||
+          item.contentHash !== normalizedEntry.contentHash,
       );
-      next.push(entry);
+      next.push(normalizedEntry);
       await storage.set({ [HISTORY_KEY]: next });
     },
   };

@@ -1,4 +1,5 @@
 import { sha256Text, stableJson } from './hash';
+import { sanitizeTextContent } from './privacy';
 import type {
   ArchivePlan,
   CaptureHistoryEntry,
@@ -14,8 +15,8 @@ export type ArchiveResolution =
 const HASH_PREFIX = 'sha256:';
 const SAFE_ARCHIVE_PREFIX = `${BACKUP_ROOT}/BofA/`;
 
-export function safePathSegment(value: string, fallback = 'untitled'): string {
-  const clean = value
+function cleanPathSegment(value: string): string {
+  return value
     .normalize('NFKC')
     .replace(/[\u0000-\u001f\u007f]/g, '')
     .replace(/[\\/:*?"<>|#\[\]]/g, ' ')
@@ -24,7 +25,10 @@ export function safePathSegment(value: string, fallback = 'untitled'): string {
     .replace(/[. ]+$/, '')
     .trim()
     .slice(0, 80);
-  return clean || fallback;
+}
+
+export function safePathSegment(value: string, fallback = 'untitled'): string {
+  return cleanPathSegment(value) || cleanPathSegment(fallback) || 'untitled';
 }
 
 function isSafeSourceId(value: string): boolean {
@@ -113,16 +117,21 @@ export async function resolveArchivePlan(
   const sameIdentity = history.filter(
     (entry) => entry.identityKey === identityKey && isSafeArchiveDir(entry.archivePath),
   );
-  const sameHash = sameIdentity.find((entry) => entry.contentHash === document.contentHash);
-  if (sameHash?.status === 'complete') return { kind: 'duplicate', entry: sameHash };
+  const sameHash = sameIdentity.filter((entry) => entry.contentHash === document.contentHash);
+  const complete = sameHash.find((entry) => entry.status === 'complete');
+  if (complete) return { kind: 'duplicate', entry: complete };
 
-  if (sameHash?.status === 'partial') {
-    return writePlan(document, identityKey, sameHash.archivePath, false, true);
+  const partial = sameHash.find((entry) => entry.status === 'partial');
+  if (partial) {
+    const revision = sameIdentity.some((entry) => entry.contentHash !== document.contentHash);
+    return writePlan(document, identityKey, partial.archivePath, revision, true);
   }
 
   const date = captureDate(document.capturedAt);
   const year = date.slice(0, 4);
-  const title = safePathSegment(document.title || 'untitled-report');
+  const title = safePathSegment(
+    sanitizeTextContent(document.title || 'untitled-report', document.sanitizedSource),
+  );
   const shortId = safePathSegment(
     document.sourceId || document.contentHash.slice(HASH_PREFIX.length, HASH_PREFIX.length + 8),
   ).slice(0, 16);
