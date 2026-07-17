@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   bofaRunKey,
+  bofaDomIdentity,
+  createNavigationCaptureScheduler,
   createRunController,
   waitForStablePage,
 } from '@/utils/research/observe';
@@ -59,16 +61,44 @@ describe('page observation', () => {
     expect(controller.isCurrent(secondGeneration, secondKey)).toBe(true);
   });
 
-  it('invalidates a query-only navigation before the new source ID is observed', () => {
-    const controller = createRunController();
-    const staleKey = bofaRunKey('https://rsch.baml.com/r?q=first-report', 'BOFA-1');
-    const staleGeneration = controller.start(staleKey);
-    const navigationGeneration = controller.start(staleKey);
-    const recaptureKey = bofaRunKey('https://rsch.baml.com/r?q=second-report', 'BOFA-2');
-    const recaptureGeneration = controller.start(recaptureKey);
+  it('holds a query-only navigation until the DOM identity changes, then starts one recapture', async () => {
+    const scheduler = createNavigationCaptureScheduler();
+    const firstUrl = 'https://rsch.baml.com/r?q=first-report';
+    const nextUrl = 'https://rsch.baml.com/r?q=second-report';
+    const firstIdentity = bofaDomIdentity(firstUrl, ready);
+    const firstKey = bofaRunKey(firstUrl, 'BOFA-1');
+    const first = scheduler.begin(firstUrl, firstIdentity, firstKey);
+    const sends: string[] = [];
 
-    expect(controller.isCurrent(staleGeneration, staleKey)).toBe(false);
-    expect(controller.isCurrent(navigationGeneration, staleKey)).toBe(false);
-    expect(controller.isCurrent(recaptureGeneration, recaptureKey)).toBe(true);
+    expect(scheduler.sync(nextUrl, firstIdentity, firstKey)).toBeUndefined();
+    await Promise.resolve();
+    if (scheduler.isCurrent(first.generation, first.runKey)) sends.push(first.runKey);
+    expect(sends).toEqual([]);
+    expect(scheduler.sync(nextUrl, firstIdentity, firstKey)).toBeUndefined();
+
+    const nextIdentity = bofaDomIdentity(nextUrl, { ...ready, sourceId: 'BOFA-2' });
+    const nextKey = bofaRunKey(nextUrl, 'BOFA-2');
+    const recapture = scheduler.sync(nextUrl, nextIdentity, nextKey);
+    expect(recapture).toBeDefined();
+    if (recapture && scheduler.isCurrent(recapture.generation, recapture.runKey)) {
+      sends.push(recapture.runKey);
+    }
+    expect(sends).toEqual([nextKey]);
+    expect(scheduler.sync(nextUrl, nextIdentity, nextKey)).toBeUndefined();
+  });
+
+  it('starts immediately when navigation arrives after the DOM identity already changed', async () => {
+    const scheduler = createNavigationCaptureScheduler();
+    const firstUrl = 'https://rsch.baml.com/r?q=first-report';
+    const nextUrl = 'https://rsch.baml.com/r?q=second-report';
+    const firstIdentity = bofaDomIdentity(firstUrl, ready);
+    const first = scheduler.begin(firstUrl, firstIdentity, bofaRunKey(firstUrl, 'BOFA-1'));
+    const nextIdentity = bofaDomIdentity(nextUrl, { ...ready, sourceId: 'BOFA-2' });
+    const nextKey = bofaRunKey(nextUrl, 'BOFA-2');
+
+    await Promise.resolve();
+    const recapture = scheduler.sync(nextUrl, nextIdentity, nextKey);
+    expect(scheduler.isCurrent(first.generation, first.runKey)).toBe(false);
+    expect(recapture).toMatchObject({ runKey: nextKey });
   });
 });

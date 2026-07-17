@@ -189,3 +189,59 @@ does not cancel or manipulate an active Chrome download; it waits for Chrome to 
 cleanup. No tab is closed and no browser automation is added. Real download restart behavior is
 still not exercised against a live Chrome profile; synthetic download ports cover the supported
 type-level search contract and timeout behavior.
+
+## Review 3 follow-up: SPA navigation race — RED -> GREEN
+
+### RED
+
+Added the navigation scheduler tests before production code. They require a query-only navigation
+to invalidate the old generation without sending its still-visible report, defer recapture until a
+safe DOM identity changes, and start immediately when the navigation event observes the new DOM.
+
+```sh
+npm test -- tests/research/observe.test.ts
+```
+
+Result: FAIL as expected — both new regressions failed because
+`createNavigationCaptureScheduler` did not exist.
+
+### GREEN
+
+- Added a small, DOM-independent navigation scheduler. It invalidates on every location change,
+  but waits when the bounded identity is still the old one. A later identity change starts exactly
+  one new generation; an event that arrives after the DOM update starts it immediately.
+- Identity is the sanitized, 256-character-bounded BofA source ID plus body length, table count,
+  and the fixed `fnv1a64` body fingerprint. It does not retain report body text.
+- The content script now calls the scheduler before every probe/extract/send/result-apply guard.
+  History events only synchronize/invalidate; they never force a capture against the old DOM.
+  A 250 ms location watcher covers main-world `pushState`/`replaceState` calls that bypass the
+  isolated-world history wrapper. Raw `location.href` is only compared in scheduler closure state;
+  it is never used as a key, stored, logged, or placed in status.
+
+Final verification:
+
+```sh
+npm test -- tests/research/capture-service.test.ts tests/research/observe.test.ts tests/research/status.test.ts tests/research/archive-writer.test.ts tests/research/chrome-archive-io.test.ts
+# PASS: 5 files, 29 tests
+npm test
+# PASS: 12 files, 70 tests
+npm run compile
+# PASS
+npm run build
+# PASS
+git diff --check
+# PASS
+```
+
+The built manifest still has exactly one content-script match,
+`https://rsch.baml.com/*`. The production content-script ASCII scan returned no matches (expected
+non-match exit status); the manifest intentionally includes its pre-existing Chinese description.
+
+## Review 3 self-review
+
+The scheduler is deliberately limited to capture-generation scheduling; it does not add a URL
+queue, persistent navigation state, browser control, or tab closing. Existing readiness probing,
+extraction, submission, and result-application guards remain in place. The remaining verification
+boundary is a real BofA SPA transition in Chrome: synthetic scheduler tests prove the ordering, but
+they do not exercise the target site's rendering timing. The 250 ms watcher is bounded transient
+work and provides a fallback for main-world history mutations.

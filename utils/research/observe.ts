@@ -12,6 +12,7 @@ export interface StablePageOptions {
 
 export interface RunController {
   start(key: string): number;
+  invalidate(): void;
   isCurrent(generation: number, key: string): boolean;
 }
 
@@ -30,8 +31,86 @@ export function createRunController(): RunController {
       generation += 1;
       return generation;
     },
+    invalidate() {
+      generation += 1;
+    },
     isCurrent(runGeneration, runKey) {
       return generation === runGeneration && key === runKey;
+    },
+  };
+}
+
+export interface ScheduledCapture {
+  generation: number;
+  runKey: string;
+}
+
+export interface NavigationCaptureScheduler {
+  begin(locationHref: string, domIdentity: string, runKey: string): ScheduledCapture;
+  restart(locationHref: string, domIdentity: string, runKey: string): ScheduledCapture;
+  sync(locationHref: string, domIdentity: string, runKey: string): ScheduledCapture | undefined;
+  isCurrent(generation: number, runKey: string): boolean;
+}
+
+export function bofaDomIdentity(rawUrl: string, evidence: ReadinessEvidence): string {
+  const sourceId = evidence.sourceId
+    ? sanitizeTextContent(evidence.sourceId, rawUrl).slice(0, 256)
+    : '';
+  const fingerprint = /^fnv1a64:[0-9a-f]{16}$/.test(evidence.tailText)
+    ? evidence.tailText
+    : '';
+  return `${sourceId}|${evidence.bodyTextLength}|${evidence.tableCount}|${fingerprint}`;
+}
+
+export function createNavigationCaptureScheduler(): NavigationCaptureScheduler {
+  const runs = createRunController();
+  let previousLocation = '';
+  let previousIdentity = '';
+  let previousRunKey = '';
+  let waitingForIdentityChange = false;
+  const start = (runKey: string): ScheduledCapture => {
+    previousRunKey = runKey;
+    return { generation: runs.start(runKey), runKey };
+  };
+
+  return {
+    begin(locationHref, domIdentity, runKey) {
+      previousLocation = locationHref;
+      previousIdentity = domIdentity;
+      waitingForIdentityChange = false;
+      return start(runKey);
+    },
+    restart(locationHref, domIdentity, runKey) {
+      previousLocation = locationHref;
+      previousIdentity = domIdentity;
+      waitingForIdentityChange = false;
+      return start(runKey);
+    },
+    sync(locationHref, domIdentity, runKey) {
+      if (locationHref !== previousLocation) {
+        previousLocation = locationHref;
+        runs.invalidate();
+        if (domIdentity === previousIdentity) {
+          waitingForIdentityChange = true;
+          return undefined;
+        }
+        previousIdentity = domIdentity;
+        waitingForIdentityChange = false;
+        return start(runKey);
+      }
+      if (waitingForIdentityChange && domIdentity !== previousIdentity) {
+        previousIdentity = domIdentity;
+        waitingForIdentityChange = false;
+        return start(runKey);
+      }
+      if (!waitingForIdentityChange && runKey !== previousRunKey) {
+        previousIdentity = domIdentity;
+        return start(runKey);
+      }
+      return undefined;
+    },
+    isCurrent(generation, runKey) {
+      return runs.isCurrent(generation, runKey);
     },
   };
 }

@@ -4,7 +4,13 @@ import {
   type CaptureRequest,
   type GetPageStatusResponse,
 } from '@/utils/research/messages';
-import { bofaRunKey, createRunController, waitForStablePage } from '@/utils/research/observe';
+import {
+  bofaDomIdentity,
+  bofaRunKey,
+  createNavigationCaptureScheduler,
+  type ScheduledCapture,
+  waitForStablePage,
+} from '@/utils/research/observe';
 import { redactError } from '@/utils/research/privacy';
 import {
   isBofaAutoCaptureEnabled,
@@ -20,8 +26,7 @@ export default defineContentScript({
   matches: ['https://rsch.baml.com/*'],
   runAt: 'document_idle',
   main() {
-    const runs = createRunController();
-    let activeKey = '';
+    const scheduler = createNavigationCaptureScheduler();
     let status: PageStatus = {
       code: 'observing',
       message: '正在识别当前研报页面',
@@ -54,13 +59,17 @@ export default defineContentScript({
       }
     };
 
+    const readEvidence = () => bofaAdapter.readinessEvidence(document, new URL(location.href));
     const readRunKey = () => bofaRunKey(location.href, bofaAdapter.getSourceId(document) || undefined);
-    let restartCurrentRun: (force?: boolean) => void = () => {};
+    const readDomIdentity = () => bofaDomIdentity(location.href, readEvidence());
+    let startCapture: (capture: ScheduledCapture) => void = () => {};
+    const syncNavigation = () => {
+      const capture = scheduler.sync(location.href, readDomIdentity(), readRunKey());
+      if (capture) startCapture(capture);
+    };
     const isCurrent = (runGeneration: number, runKey: string) => {
-      if (!runs.isCurrent(runGeneration, runKey)) return false;
-      if (readRunKey() === runKey) return true;
-      restartCurrentRun();
-      return false;
+      syncNavigation();
+      return scheduler.isCurrent(runGeneration, runKey);
     };
 
     const run = async (runGeneration: number, runKey: string) => {
@@ -83,7 +92,7 @@ export default defineContentScript({
 
       setStatus('waiting-ready', '等待研报正文稳定');
       const readiness = await waitForStablePage({
-        probe: () => bofaAdapter.readinessEvidence(document, new URL(location.href)),
+        probe: readEvidence,
         sleep,
         shouldContinue: () => isCurrent(runGeneration, runKey),
       });
@@ -128,12 +137,8 @@ export default defineContentScript({
       }
     };
 
-    restartCurrentRun = (force = false) => {
-      const nextKey = readRunKey();
-      if (!force && nextKey === activeKey) return;
-      activeKey = nextKey;
-      const runGeneration = runs.start(nextKey);
-      void safelyRun(runGeneration, nextKey);
+    startCapture = ({ generation, runKey }) => {
+      void safelyRun(generation, runKey);
     };
 
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -144,7 +149,7 @@ export default defineContentScript({
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local' || !changes[RESEARCH_SETTINGS_KEY]) return;
-      restartCurrentRun(true);
+      startCapture(scheduler.restart(location.href, readDomIdentity(), readRunKey()));
     });
 
     let identityCheckTimer: number | undefined;
@@ -152,7 +157,7 @@ export default defineContentScript({
       if (identityCheckTimer !== undefined) return;
       identityCheckTimer = window.setTimeout(() => {
         identityCheckTimer = undefined;
-        restartCurrentRun();
+        syncNavigation();
       }, 100);
     };
     new MutationObserver(scheduleIdentityCheck).observe(document.documentElement, {
@@ -167,13 +172,14 @@ export default defineContentScript({
       const original = history[method] as History['pushState'];
       history[method] = ((...args: Parameters<History['pushState']>) => {
         const result = original.apply(history, args);
-        queueMicrotask(() => restartCurrentRun(true));
+        queueMicrotask(syncNavigation);
         return result;
       }) as History['pushState'];
     }
-    window.addEventListener('popstate', () => restartCurrentRun(true));
-    window.addEventListener('hashchange', () => restartCurrentRun(true));
+    window.addEventListener('popstate', syncNavigation);
+    window.addEventListener('hashchange', syncNavigation);
+    window.setInterval(syncNavigation, 250);
 
-    restartCurrentRun();
+    startCapture(scheduler.begin(location.href, readDomIdentity(), readRunKey()));
   },
 });
