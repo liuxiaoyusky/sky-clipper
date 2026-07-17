@@ -58,6 +58,27 @@ describe('BofA adapter', () => {
     expect(result.document.originalMarkdown).not.toContain('summary:');
   });
 
+  it('sanitizes a polluted source ID before persisting submission metadata or Markdown', async () => {
+    const sourceId = document.querySelector<HTMLInputElement>('#reportPid');
+    const privateSourceId =
+      'https://rsch.baml.com/r?q=private-source-report&e=private.source@example.com&h=private-source-signature';
+    if (!sourceId) throw new Error('Fixture source ID is unavailable');
+    sourceId.value = privateSourceId;
+
+    const result = await bofaAdapter.extractOriginal(
+      document,
+      privateUrl,
+      '2026-07-17T16:30:00+09:00',
+    );
+    const persisted = JSON.stringify(result.document);
+
+    expect(result.document.sourceId).toBe('https://rsch.baml.com/r');
+    expect(persisted).not.toContain('private-source-report');
+    expect(persisted).not.toContain('private.source@example.com');
+    expect(persisted).not.toContain('private-source-signature');
+    expect(result.document.originalMarkdown).not.toContain('?q=');
+  });
+
   it('removes private URL attributes from every element in a complex table', async () => {
     const tableCell = document.querySelector<HTMLTableCellElement>('table td');
     const privateTableUrl =

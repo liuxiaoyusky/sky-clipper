@@ -114,7 +114,7 @@ export const bofaAdapter: ResearchSiteAdapter = {
       throw new Error('BofA report is not extractable');
     }
     const canonical = canonicalizeBofaUrl(rawUrl);
-    const sourceId = inputValue(document, 'reportPid');
+    const sourceId = inputValue(document, 'reportPid', rawUrl);
     const title = inputValue(document, 'reportTitle', rawUrl);
     const subtitle = inputValue(document, 'reportSubTitle', rawUrl);
     const publishedAt = inputValue(document, 'reportPublishDate', rawUrl);
