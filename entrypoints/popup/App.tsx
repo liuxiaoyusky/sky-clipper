@@ -1,8 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import type {
-  GetPageStatusRequest,
-  GetPageStatusResponse,
-} from '@/utils/research/messages';
+import { useEffect, useRef, useState } from 'react';
+import type { GetPageStatusResponse } from '@/utils/research/messages';
 import {
   DEFAULT_RESEARCH_SETTINGS,
   loadResearchSettings,
@@ -11,63 +8,96 @@ import {
 } from '@/utils/research/settings';
 import { presentPageStatus } from '@/utils/research/status';
 import type { PageStatus } from '@/utils/research/types';
+import {
+  createPageStatusPoller,
+  createSettingsSaveQueue,
+  readPageStatus,
+  type PageStatusPoller,
+  type SettingsQueueState,
+  type SettingsSaveQueue,
+} from './model';
 
 const BACKUP_LABEL = 'Downloads/Fin-report-clipper Backup/';
-const unsupportedStatus: PageStatus = {
-  code: 'unsupported',
-  message: '当前页面不是已支持的 BofA 研报',
+const observingStatus: PageStatus = {
+  code: 'observing',
+  message: '正在读取当前页面状态',
   updatedAt: new Date().toISOString(),
 };
 
-async function readCurrentPageStatus(): Promise<PageStatus> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id == null) return unsupportedStatus;
-  const request: GetPageStatusRequest = {
-    target: 'content',
-    type: 'FIN_REPORT_CLIPPER_GET_PAGE_STATUS',
-  };
-  try {
-    const response = (await chrome.tabs.sendMessage(tab.id, request)) as
-      | GetPageStatusResponse
-      | undefined;
-    return response?.ok ? response.status : unsupportedStatus;
-  } catch {
-    return unsupportedStatus;
-  }
+function readCurrentPageStatus(): Promise<PageStatus> {
+  return readPageStatus({
+    queryActiveTab: () => chrome.tabs.query({ active: true, currentWindow: true }),
+    sendToTab: (tabId) =>
+      chrome.tabs.sendMessage(tabId, {
+        target: 'content',
+        type: 'FIN_REPORT_CLIPPER_GET_PAGE_STATUS',
+      }) as Promise<GetPageStatusResponse | undefined>,
+  });
 }
 
 export function App() {
-  const [settings, setSettings] = useState<ResearchSettings>(DEFAULT_RESEARCH_SETTINGS);
-  const [status, setStatus] = useState<PageStatus>({
-    code: 'observing',
-    message: '正在读取当前页面状态',
-    updatedAt: new Date().toISOString(),
+  const [settingsState, setSettingsState] = useState<SettingsQueueState>({
+    settings: DEFAULT_RESEARCH_SETTINGS,
+    saving: false,
   });
-
-  const refreshStatus = useCallback(async () => {
-    setStatus(await readCurrentPageStatus());
-  }, []);
+  const [settingsReady, setSettingsReady] = useState(false);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [status, setStatus] = useState<PageStatus>(observingStatus);
+  const queueRef = useRef<SettingsSaveQueue>();
+  const pollerRef = useRef<PageStatusPoller>();
 
   useEffect(() => {
     let active = true;
-    void loadResearchSettings().then((value) => {
-      if (active) setSettings(value);
-    });
-    void refreshStatus();
-    const timer = window.setInterval(refreshStatus, 1000);
+    void loadResearchSettings()
+      .then((initial) => {
+        if (!active) return;
+        const queue = createSettingsSaveQueue(initial, saveResearchSettings);
+        queueRef.current = queue;
+        setSettingsState(queue.getState());
+        setSettingsReady(true);
+        setSettingsLoading(false);
+        const unsubscribe = queue.subscribe((next) => {
+          if (active) setSettingsState(next);
+        });
+        return unsubscribe;
+      })
+      .catch(() => {
+        if (!active) return;
+        setSettingsState({
+          settings: DEFAULT_RESEARCH_SETTINGS,
+          saving: false,
+          error: '无法读取设置，请关闭弹窗后重试',
+        });
+        setSettingsLoading(false);
+      });
     return () => {
       active = false;
-      window.clearInterval(timer);
     };
-  }, [refreshStatus]);
+  }, []);
 
-  const update = async (next: ResearchSettings) => {
-    setSettings(next);
-    await saveResearchSettings(next);
-    await refreshStatus();
+  useEffect(() => {
+    const poller = createPageStatusPoller({
+      read: readCurrentPageStatus,
+      publish: setStatus,
+      schedule: (callback, delay) => window.setTimeout(callback, delay),
+      cancel: (timer) => window.clearTimeout(timer),
+    });
+    pollerRef.current = poller;
+    poller.start();
+    return () => {
+      poller.stop();
+      pollerRef.current = undefined;
+    };
+  }, []);
+
+  const update = (apply: (settings: ResearchSettings) => ResearchSettings) => {
+    const queue = queueRef.current;
+    if (!queue) return;
+    void queue.patch(apply).then(() => pollerRef.current?.invalidate());
   };
 
   const presented = presentPageStatus(status.code);
+  const controlsDisabled = !settingsReady || settingsState.saving;
   return (
     <main className="frc-popup">
       <header className="frc-header">
@@ -92,8 +122,12 @@ export function App() {
           </span>
           <input
             type="checkbox"
-            checked={settings.autoCapture}
-            onChange={(event) => void update({ ...settings, autoCapture: event.target.checked })}
+            checked={settingsState.settings.autoCapture}
+            disabled={controlsDisabled}
+            onChange={(event) => {
+              const autoCapture = event.target.checked;
+              update((settings) => ({ ...settings, autoCapture }));
+            }}
           />
         </label>
         <label>
@@ -103,16 +137,24 @@ export function App() {
           </span>
           <input
             type="checkbox"
-            checked={settings.providers.bofa}
-            onChange={(event) =>
-              void update({
+            checked={settingsState.settings.providers.bofa}
+            disabled={controlsDisabled}
+            onChange={(event) => {
+              const bofa = event.target.checked;
+              update((settings) => ({
                 ...settings,
-                providers: { ...settings.providers, bofa: event.target.checked },
-              })
-            }
+                providers: { ...settings.providers, bofa },
+              }));
+            }}
           />
         </label>
       </section>
+
+      {(settingsLoading || settingsState.saving || settingsState.error) && (
+        <p className="frc-settings-state" role={settingsState.error ? 'alert' : undefined}>
+          {settingsState.error || (settingsLoading ? '正在读取设置' : '正在保存设置')}
+        </p>
+      )}
 
       <footer>
         <span>固定备份位置</span>

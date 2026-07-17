@@ -59,6 +59,8 @@ body { margin: 0; background: #f5f7fa; }
 .frc-settings input { width: 18px; height: 18px; accent-color: #235bc1; }
 
 footer { display: grid; gap: 4px; color: #687386; font-size: 12px; }
+.frc-settings-state { margin: -4px 0 0; color: #687386; font-size: 12px; }
+.frc-settings-state[role='alert'] { color: #c43d3d; }
 
 @media (prefers-color-scheme: dark) {
   :root, body { background: #161a21; color: #edf1f7; }
