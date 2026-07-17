@@ -36,6 +36,16 @@ describe('research URL privacy', () => {
     expect(message).toContain('[redacted-url]');
   });
 
+  it('redacts standalone sensitive pairs and URL tails from errors', () => {
+    const message = redactError(
+      new Error('request failed at https://private.example/r?token=secret,signature=abc)'),
+    );
+
+    expect(message).not.toContain('secret');
+    expect(message).not.toContain('abc');
+    expect(message).toBe('request failed at [redacted-url],signature=[redacted-value])');
+  });
+
   it('sanitizes URLs and emails that appear as visible report text', () => {
     expect(
       sanitizeTextContent(

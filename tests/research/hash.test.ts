@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
-import { buildContentHash, sha256Text } from '@/utils/research/hash';
+import { buildContentHash, sha256Text, stableJson } from '@/utils/research/hash';
 
 describe('research content hash', () => {
   it('implements SHA-256 with the required prefix', async () => {
@@ -9,7 +9,7 @@ describe('research content hash', () => {
     );
   });
 
-  it('is stable across object key order and excludes capture time', async () => {
+  it('is stable across observed metadata key order', async () => {
     const left = await buildContentHash({
       provider: 'BofA Global Research',
       sourceId: 'BOFA-1',
@@ -29,5 +29,24 @@ describe('research content hash', () => {
       bodyMarkdown: '## Thesis\n\nBody',
     });
     expect(left).toBe(right);
+  });
+
+  it('normalizes CRLF and LF string values before content hashing', async () => {
+    const input = {
+      provider: 'BofA Global Research',
+      observedMetadata: { summary: 'Line one\r\nLine two' },
+      bodyMarkdown: 'Heading\r\n\r\nBody',
+    };
+    const normalizedInput = {
+      ...input,
+      observedMetadata: { summary: 'Line one\nLine two' },
+      bodyMarkdown: 'Heading\n\nBody',
+    };
+
+    await expect(buildContentHash(input)).resolves.toBe(await buildContentHash(normalizedInput));
+  });
+
+  it('sorts object keys by code unit order', () => {
+    expect(stableJson({ ä: 'umlaut', z: 'zee' })).toBe('{"z":"zee","ä":"umlaut"}');
   });
 });

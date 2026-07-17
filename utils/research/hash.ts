@@ -1,11 +1,12 @@
 import type { MetadataValue } from './types';
 
 function sortValue(value: unknown): unknown {
+  if (typeof value === 'string') return value.replace(/\r\n?/g, '\n');
   if (Array.isArray(value)) return value.map(sortValue);
   if (value && typeof value === 'object') {
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
+        .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(([key, child]) => [key, sortValue(child)]),
     );
   }
