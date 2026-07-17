@@ -87,7 +87,7 @@ async function download(
   url: string,
   expectedMimePrefix?: string,
   rollbackTextOnCleanupFailure = false,
-): Promise<void> {
+): Promise<number> {
   if (!isSafeArchiveFilename(path)) throw new Error('Unsafe archive download filename');
   const downloadId = await chrome.downloads.download({
     url,
@@ -130,6 +130,7 @@ async function download(
     throw new Error(DOWNLOAD_CLEANUP_ERROR);
   }
   if (operationError) throw operationError;
+  return downloadId;
 }
 
 async function createBlobUrl(content: string, mime: string): Promise<string> {
@@ -164,8 +165,9 @@ export function createChromeArchiveIo(): ArchiveIo {
     async writeText(path, content, mime) {
       const url = await createBlobUrl(content, mime);
       let operationError: unknown;
+      let downloadId: number | undefined;
       try {
-        await download(path, url, undefined, true);
+        downloadId = await download(path, url, undefined, true);
       } catch (error) {
         operationError = error;
       }
@@ -175,6 +177,9 @@ export function createChromeArchiveIo(): ArchiveIo {
         try {
           await chrome.offscreen.closeDocument();
         } catch {
+          if (downloadId !== undefined) {
+            await chrome.downloads.removeFile(downloadId).catch(() => {});
+          }
           throw new Error(BLOB_CLEANUP_ERROR);
         }
       }

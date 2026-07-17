@@ -195,4 +195,73 @@ describe('archive writer', () => {
     expect(savedFiles.has(plan.manifestPath)).toBe(false);
     expect(removedIds).toEqual([4]);
   });
+
+  it('rolls back a completed manifest when Blob revoke and offscreen close both fail', async () => {
+    const savedFiles = new Map<string, string>();
+    const blobs = new Map<string, string>();
+    const filenames = new Map<number, string>();
+    const removedIds: number[] = [];
+    let nextDownloadId = 1;
+    let nextBlobId = 1;
+    vi.stubGlobal('chrome', {
+      downloads: {
+        download: vi.fn(async ({ filename, url }) => {
+          const id = nextDownloadId++;
+          filenames.set(id, filename);
+          savedFiles.set(filename, blobs.get(url) || 'PDF');
+          return id;
+        }),
+        search: vi.fn(async ({ id }) => [
+          {
+            id,
+            state: 'complete',
+            mime: filenames.get(id)?.endsWith('.pdf') ? 'application/pdf' : 'text/markdown',
+          },
+        ]),
+        removeFile: vi.fn(async (id) => {
+          removedIds.push(id);
+          const filename = filenames.get(id);
+          if (filename) savedFiles.delete(filename);
+        }),
+        erase: vi.fn(async ({ id }) => [id]),
+        onChanged: {
+          addListener: vi.fn(),
+          removeListener: vi.fn(),
+        },
+      },
+      runtime: {
+        ContextType: { OFFSCREEN_DOCUMENT: 'OFFSCREEN_DOCUMENT' },
+        getURL: vi.fn(() => 'chrome-extension://test/offscreen.html'),
+        getContexts: vi.fn(async () => []),
+        sendMessage: vi.fn(async (request) => {
+          if (request.type === 'FIN_REPORT_CLIPPER_CREATE_BLOB') {
+            const url = `blob:archive-${nextBlobId++}`;
+            blobs.set(url, request.content);
+            return { ok: true, requestId: request.requestId, url };
+          }
+          if (request.url === 'blob:archive-3') {
+            throw new Error('revoke failed: private-blob-url');
+          }
+          blobs.delete(request.url);
+          return { ok: true };
+        }),
+      },
+      offscreen: {
+        Reason: { BLOBS: 'BLOBS' },
+        createDocument: vi.fn(async () => undefined),
+        closeDocument: vi.fn(async () => {
+          throw new Error('close failed: private-close-detail');
+        }),
+      },
+    });
+
+    const result = writeArchive(plan, submission, createChromeArchiveIo());
+
+    await expect(result).rejects.toThrow('Archive Blob cleanup failed');
+    await expect(result).rejects.not.toThrow('private-blob-url');
+    await expect(result).rejects.not.toThrow('private-close-detail');
+    expect(savedFiles.get(plan.originalPdfPath || '')).toBe('PDF');
+    expect(savedFiles.has(plan.manifestPath)).toBe(false);
+    expect(removedIds).toEqual([4]);
+  });
 });
