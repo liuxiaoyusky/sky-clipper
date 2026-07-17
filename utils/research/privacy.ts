@@ -20,11 +20,11 @@ const GENERIC_SENSITIVE_QUERY_KEYS = new Set([
   'token',
 ]);
 
-const HTTP_URL_RE = /https?:\/\/[^\s"'<>),]+/gi;
+const HTTP_URL_RE = /https?:\/\/[^\s"'<>]+/gi;
 const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
 const EMAIL_VALUE_RE = /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i;
-const SENSITIVE_ERROR_PAIR_RE =
-  /((?:^|[?&,\s(])(?:auth|e|email|h|key|q|sig|signature|token)=)[^&\s),]*/gi;
+const SENSITIVE_ERROR_FIELD_RE =
+  /((?:^|[?&,\s({])(?:"?(?:auth|e|email|h|key|q|sig|signature|token)"?)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^&\s,)}\]]+)/gi;
 
 export function canonicalizeBofaUrl(rawUrl: string): CanonicalResearchUrl {
   const url = new URL(rawUrl);
@@ -94,6 +94,6 @@ export function redactError(error: unknown): string {
   return raw
     .replace(HTTP_URL_RE, '[redacted-url]')
     .replace(EMAIL_RE, '[redacted-email]')
-    .replace(SENSITIVE_ERROR_PAIR_RE, '$1[redacted-value]')
+    .replace(SENSITIVE_ERROR_FIELD_RE, '$1[redacted-value]')
     .slice(0, 240);
 }

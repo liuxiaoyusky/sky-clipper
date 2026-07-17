@@ -36,14 +36,41 @@ describe('research URL privacy', () => {
     expect(message).toContain('[redacted-url]');
   });
 
-  it('redacts standalone sensitive pairs and URL tails from errors', () => {
+  it('redacts URL fragments without preserving sensitive query tails', () => {
     const message = redactError(
       new Error('request failed at https://private.example/r?token=secret,signature=abc)'),
     );
 
     expect(message).not.toContain('secret');
     expect(message).not.toContain('abc');
-    expect(message).toBe('request failed at [redacted-url],signature=[redacted-value])');
+    expect(message).toBe('request failed at [redacted-url]');
+  });
+
+  it('redacts the complete URL when a sensitive value contains a comma', () => {
+    const message = redactError(
+      new Error('download failed for https://rsch.baml.com/r?token=secret,continuation'),
+    );
+
+    expect(message).not.toContain('secret');
+    expect(message).not.toContain('continuation');
+    expect(message).toBe('download failed for [redacted-url]');
+  });
+
+  it('removes sensitive URL tails from persisted visible text', () => {
+    expect(
+      sanitizeTextContent(
+        'Read https://rsch.baml.com/r?token=secret,continuation',
+        privateUrl,
+      ),
+    ).toBe('Read https://rsch.baml.com/r');
+  });
+
+  it('redacts JSON and colon-style sensitive error fields', () => {
+    const message = redactError(new Error('response {"token":"secret"}; signature: abc'));
+
+    expect(message).not.toContain('secret');
+    expect(message).not.toContain('abc');
+    expect(message).toBe('response {"token":[redacted-value]}; signature: [redacted-value]');
   });
 
   it('sanitizes URLs and emails that appear as visible report text', () => {
