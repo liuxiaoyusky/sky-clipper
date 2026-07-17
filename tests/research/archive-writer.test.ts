@@ -200,7 +200,9 @@ describe('archive writer', () => {
     const savedFiles = new Map<string, string>();
     const blobs = new Map<string, string>();
     const filenames = new Map<number, string>();
+    const activeIds = new Set<number>();
     const removedIds: number[] = [];
+    const operations: string[] = [];
     let nextDownloadId = 1;
     let nextBlobId = 1;
     vi.stubGlobal('chrome', {
@@ -208,7 +210,9 @@ describe('archive writer', () => {
         download: vi.fn(async ({ filename, url }) => {
           const id = nextDownloadId++;
           filenames.set(id, filename);
+          activeIds.add(id);
           savedFiles.set(filename, blobs.get(url) || 'PDF');
+          operations.push(`download:${id}`);
           return id;
         }),
         search: vi.fn(async ({ id }) => [
@@ -220,10 +224,16 @@ describe('archive writer', () => {
         ]),
         removeFile: vi.fn(async (id) => {
           removedIds.push(id);
+          operations.push(`remove:${id}`);
+          if (!activeIds.has(id)) return;
           const filename = filenames.get(id);
           if (filename) savedFiles.delete(filename);
         }),
-        erase: vi.fn(async ({ id }) => [id]),
+        erase: vi.fn(async ({ id }) => {
+          operations.push(`erase:${id}`);
+          activeIds.delete(id);
+          return [id];
+        }),
         onChanged: {
           addListener: vi.fn(),
           removeListener: vi.fn(),
@@ -263,5 +273,7 @@ describe('archive writer', () => {
     expect(savedFiles.get(plan.originalPdfPath || '')).toBe('PDF');
     expect(savedFiles.has(plan.manifestPath)).toBe(false);
     expect(removedIds).toEqual([4]);
+    expect(operations.indexOf('remove:4')).toBeLessThan(operations.indexOf('erase:4'));
+    expect(removedIds).not.toContain(2);
   });
 });

@@ -86,7 +86,7 @@ async function download(
   path: string,
   url: string,
   expectedMimePrefix?: string,
-  rollbackTextOnCleanupFailure = false,
+  eraseHistoryOnSuccess = true,
 ): Promise<number> {
   if (!isSafeArchiveFilename(path)) throw new Error('Unsafe archive download filename');
   const downloadId = await chrome.downloads.download({
@@ -108,29 +108,43 @@ async function download(
     operationError = error;
   }
 
-  let cleanupFailed = false;
-  let fileRemovalAttempted = false;
   if (operationError) {
-    fileRemovalAttempted = true;
+    let cleanupFailed = false;
     try {
       await chrome.downloads.removeFile(downloadId);
     } catch {
       cleanupFailed = true;
     }
+    try {
+      await chrome.downloads.erase({ id: downloadId });
+    } catch {
+      cleanupFailed = true;
+    }
+    if (cleanupFailed) throw new Error(DOWNLOAD_CLEANUP_ERROR);
+    throw operationError;
   }
+  if (eraseHistoryOnSuccess) {
+    try {
+      await chrome.downloads.erase({ id: downloadId });
+    } catch {
+      throw new Error(DOWNLOAD_CLEANUP_ERROR);
+    }
+  }
+  return downloadId;
+}
+
+async function rollbackTextDownload(downloadId: number): Promise<void> {
+  await chrome.downloads.removeFile(downloadId).catch(() => {});
+  await chrome.downloads.erase({ id: downloadId }).catch(() => {});
+}
+
+async function finalizeTextDownload(downloadId: number): Promise<void> {
   try {
     await chrome.downloads.erase({ id: downloadId });
   } catch {
-    cleanupFailed = true;
-  }
-  if (cleanupFailed) {
-    if (rollbackTextOnCleanupFailure && !fileRemovalAttempted) {
-      await chrome.downloads.removeFile(downloadId).catch(() => {});
-    }
+    await rollbackTextDownload(downloadId);
     throw new Error(DOWNLOAD_CLEANUP_ERROR);
   }
-  if (operationError) throw operationError;
-  return downloadId;
 }
 
 async function createBlobUrl(content: string, mime: string): Promise<string> {
@@ -167,7 +181,7 @@ export function createChromeArchiveIo(): ArchiveIo {
       let operationError: unknown;
       let downloadId: number | undefined;
       try {
-        downloadId = await download(path, url, undefined, true);
+        downloadId = await download(path, url, undefined, false);
       } catch (error) {
         operationError = error;
       }
@@ -178,11 +192,12 @@ export function createChromeArchiveIo(): ArchiveIo {
           await chrome.offscreen.closeDocument();
         } catch {
           if (downloadId !== undefined) {
-            await chrome.downloads.removeFile(downloadId).catch(() => {});
+            await rollbackTextDownload(downloadId);
           }
           throw new Error(BLOB_CLEANUP_ERROR);
         }
       }
+      if (downloadId !== undefined) await finalizeTextDownload(downloadId);
       if (operationError) throw operationError;
     },
     async downloadUrl(path, url, expectedMimePrefix) {
