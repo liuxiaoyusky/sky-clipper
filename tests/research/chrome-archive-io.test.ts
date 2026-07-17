@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createChromeArchiveIo,
   eraseArchiveDownloadHistory,
+  waitForArchiveDownloadsToSettle,
 } from '@/utils/research/chrome-archive-io';
 
 interface SimulatedDownload {
@@ -129,6 +130,38 @@ describe('Chrome archive downloads', () => {
     expect(mocks.erase).toHaveBeenCalledWith({
       filenameRegex: expect.stringContaining('Fin-report-clipper Backup'),
     });
+  });
+
+  it('waits for in-progress archive downloads to settle before recovery', async () => {
+    const search = vi
+      .fn()
+      .mockResolvedValueOnce([{ id: 9, state: 'in_progress' }])
+      .mockResolvedValueOnce([]);
+    let sleeps = 0;
+
+    await waitForArchiveDownloadsToSettle({
+      downloads: { search },
+      sleep: async () => {
+        sleeps += 1;
+      },
+      maxAttempts: 2,
+    });
+
+    expect(search).toHaveBeenCalledWith({
+      filenameRegex: expect.stringContaining('Fin-report-clipper Backup'),
+      state: 'in_progress',
+    });
+    expect(sleeps).toBe(1);
+  });
+
+  it('keeps recovery blocked when archive downloads do not settle in time', async () => {
+    await expect(
+      waitForArchiveDownloadsToSettle({
+        downloads: { search: async () => [{ id: 9, state: 'in_progress' }] },
+        sleep: async () => {},
+        maxAttempts: 2,
+      }),
+    ).rejects.toThrow('Archive download recovery timed out');
   });
 
   it('treats a successful offscreen close as a released Blob when revoke fails', async () => {

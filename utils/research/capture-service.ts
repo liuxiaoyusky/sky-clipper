@@ -35,10 +35,12 @@ export interface CaptureStartupRecovery {
 
 export function createCaptureStartupRecovery(dependencies: {
   session: SessionStoragePort;
+  settle(): Promise<void>;
   sweep(): Promise<void>;
 }): CaptureStartupRecovery {
   const ready = (async () => {
     const state = await dependencies.session.get(ACTIVE_CAPTURE_LEASE_KEY);
+    await dependencies.settle();
     await dependencies.sweep();
     if (state[ACTIVE_CAPTURE_LEASE_KEY] !== undefined) {
       await dependencies.session.remove(ACTIVE_CAPTURE_LEASE_KEY);
@@ -75,8 +77,8 @@ export function createCaptureService(dependencies: CaptureServiceDependencies): 
     try {
       await recovery.ready();
       await recovery.lease.acquire();
-    } catch (error) {
-      return { status: 'failed', reason: `Capture recovery failed: ${redactError(error)}` };
+    } catch {
+      return { status: 'failed', reason: 'Capture recovery failed' };
     }
 
     const result = await processArchive(submission);

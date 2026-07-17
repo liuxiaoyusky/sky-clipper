@@ -134,6 +134,43 @@ describe('archive writer', () => {
         },
       }),
     ).toBe(false);
+    for (const document of [
+      {
+        ...submission.document,
+        title: 'https://rsch.baml.com/r?token=private-token',
+      },
+      {
+        ...submission.document,
+        authors: ['https://rsch.baml.com/r?token=private-token'],
+      },
+      {
+        ...submission.document,
+        observedMetadata: { source: 'https://example.com/r?token=private-token' },
+      },
+      {
+        ...submission.document,
+        observedMetadata: { authors: ['https://example.com/r?token=private-token'] },
+      },
+      {
+        ...submission.document,
+        originalMarkdown: `${submission.document.originalMarkdown}\nhttps://rsch.baml.com/r?token=private-token`,
+      },
+    ]) {
+      expect(isCaptureRequest({ ...request, submission: { ...submission, document } })).toBe(false);
+    }
+    expect(
+      isCaptureRequest({
+        ...request,
+        submission: {
+          ...submission,
+          document: {
+            ...submission.document,
+            title: 'Contact public.analyst@bofa.example for details',
+            originalMarkdown: `${submission.document.originalMarkdown}\nPublic contact: public.analyst@bofa.example`,
+          },
+        },
+      }),
+    ).toBe(true);
   });
 
   it('writes a Markdown safety snapshot, saves PDF, promotes Markdown, then writes capture.json', async () => {

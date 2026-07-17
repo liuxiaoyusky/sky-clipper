@@ -55,7 +55,7 @@ export default defineContentScript({
     };
 
     const readRunKey = () => bofaRunKey(location.href, bofaAdapter.getSourceId(document) || undefined);
-    let restartCurrentRun = () => {};
+    let restartCurrentRun: (force?: boolean) => void = () => {};
     const isCurrent = (runGeneration: number, runKey: string) => {
       if (!runs.isCurrent(runGeneration, runKey)) return false;
       if (readRunKey() === runKey) return true;
@@ -128,9 +128,9 @@ export default defineContentScript({
       }
     };
 
-    restartCurrentRun = () => {
+    restartCurrentRun = (force = false) => {
       const nextKey = readRunKey();
-      if (nextKey === activeKey) return;
+      if (!force && nextKey === activeKey) return;
       activeKey = nextKey;
       const runGeneration = runs.start(nextKey);
       void safelyRun(runGeneration, nextKey);
@@ -144,20 +144,35 @@ export default defineContentScript({
 
     chrome.storage.onChanged.addListener((changes, areaName) => {
       if (areaName !== 'local' || !changes[RESEARCH_SETTINGS_KEY]) return;
-      activeKey = '';
-      restartCurrentRun();
+      restartCurrentRun(true);
+    });
+
+    let identityCheckTimer: number | undefined;
+    const scheduleIdentityCheck = () => {
+      if (identityCheckTimer !== undefined) return;
+      identityCheckTimer = window.setTimeout(() => {
+        identityCheckTimer = undefined;
+        restartCurrentRun();
+      }, 100);
+    };
+    new MutationObserver(scheduleIdentityCheck).observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['value'],
+      characterData: true,
+      childList: true,
+      subtree: true,
     });
 
     for (const method of ['pushState', 'replaceState'] as const) {
       const original = history[method] as History['pushState'];
       history[method] = ((...args: Parameters<History['pushState']>) => {
         const result = original.apply(history, args);
-        queueMicrotask(restartCurrentRun);
+        queueMicrotask(() => restartCurrentRun(true));
         return result;
       }) as History['pushState'];
     }
-    window.addEventListener('popstate', restartCurrentRun);
-    window.addEventListener('hashchange', restartCurrentRun);
+    window.addEventListener('popstate', () => restartCurrentRun(true));
+    window.addEventListener('hashchange', () => restartCurrentRun(true));
 
     restartCurrentRun();
   },

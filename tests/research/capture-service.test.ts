@@ -146,6 +146,9 @@ describe('capture service', () => {
           events.push('remove');
         },
       },
+      async settle() {
+        events.push('settle');
+      },
       async sweep() {
         events.push('sweep');
         markSweepStarted();
@@ -172,10 +175,10 @@ describe('capture service', () => {
     await sweepStarted;
     const result = service.submit(submission('BOFA-1', 'a'));
     await Promise.resolve();
-    expect(events).toEqual(['get', 'sweep']);
+    expect(events).toEqual(['get', 'settle', 'sweep']);
     releaseSweep();
     await expect(result).resolves.toMatchObject({ status: 'saved' });
-    expect(events).toEqual(['get', 'sweep', 'remove', 'set', 'write', 'remove']);
+    expect(events).toEqual(['get', 'settle', 'sweep', 'remove', 'set', 'write', 'remove']);
   });
 
   it('returns a redacted recovery failure without starting archive IO', async () => {
@@ -187,8 +190,11 @@ describe('capture service', () => {
         async set() {},
         async remove() {},
       },
+      async settle() {
+        throw new Error('settle failed at https://rsch.baml.com/r?token=private-token');
+      },
       async sweep() {
-        throw new Error('sweep failed at https://rsch.baml.com/r?token=private-token');
+        throw new Error('must not sweep');
       },
     });
     let ioCreated = false;
@@ -209,7 +215,7 @@ describe('capture service', () => {
     const result = await service.submit(submission('BOFA-1', 'a'));
     expect(result.status).toBe('failed');
     if (result.status === 'failed') {
-      expect(result.reason).toContain('Capture recovery failed');
+      expect(result.reason).toBe('Capture recovery failed');
       expect(result.reason).not.toContain('rsch.baml.com');
     }
     expect(ioCreated).toBe(false);

@@ -1,6 +1,7 @@
 import {
   createChromeArchiveIo,
   eraseArchiveDownloadHistory,
+  waitForArchiveDownloadsToSettle,
 } from '@/utils/research/chrome-archive-io';
 import {
   createCaptureService,
@@ -13,6 +14,7 @@ import { redactError } from '@/utils/research/privacy';
 export default defineBackground(() => {
   const recovery = createCaptureStartupRecovery({
     session: chrome.storage.session,
+    settle: waitForArchiveDownloadsToSettle,
     sweep: eraseArchiveDownloadHistory,
   });
   const service = createCaptureService({

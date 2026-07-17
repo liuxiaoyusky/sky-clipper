@@ -6,10 +6,38 @@ const ARCHIVE_FILENAME_RE = 'Fin-report-clipper Backup';
 const SAFE_ARCHIVE_PREFIX = `${ARCHIVE_FILENAME_RE}/`;
 const DOWNLOAD_CLEANUP_ERROR = 'Archive download cleanup failed';
 const BLOB_CLEANUP_ERROR = 'Archive Blob cleanup failed';
+const DOWNLOAD_RECOVERY_TIMEOUT_ERROR = 'Archive download recovery timed out';
 let creatingOffscreen: Promise<void> | null = null;
 
 export async function eraseArchiveDownloadHistory(): Promise<void> {
   await chrome.downloads.erase({ filenameRegex: ARCHIVE_FILENAME_RE });
+}
+
+export interface ArchiveDownloadRecoveryOptions {
+  downloads?: {
+    search(query: chrome.downloads.DownloadQuery): Promise<Array<{ id: number; state: string }>>;
+  };
+  sleep?(milliseconds: number): Promise<void>;
+  maxAttempts?: number;
+  intervalMs?: number;
+}
+
+export async function waitForArchiveDownloadsToSettle(
+  options: ArchiveDownloadRecoveryOptions = {},
+): Promise<void> {
+  const downloads = options.downloads || chrome.downloads;
+  const sleep = options.sleep || ((milliseconds) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
+  const maxAttempts = options.maxAttempts ?? 20;
+  const intervalMs = options.intervalMs ?? 250;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const active = await downloads.search({
+      filenameRegex: ARCHIVE_FILENAME_RE,
+      state: 'in_progress',
+    });
+    if (!active.length) return;
+    if (attempt === maxAttempts - 1) throw new Error(DOWNLOAD_RECOVERY_TIMEOUT_ERROR);
+    await sleep(intervalMs);
+  }
 }
 
 function isSafeArchiveFilename(path: string): boolean {

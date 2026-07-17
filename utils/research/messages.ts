@@ -59,27 +59,31 @@ function hasOnlyKeys(value: Record<string, unknown>, allowed: Set<string>): bool
   return Object.keys(value).every((key) => allowed.has(key));
 }
 
-function isStringList(value: unknown): boolean {
-  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+function isSanitizedString(value: unknown, source: string): value is string {
+  return typeof value === 'string' && sanitizeTextContent(value, source) === value;
 }
 
-function isMetadataValue(value: unknown): boolean {
+function isSanitizedStringList(value: unknown, source: string): boolean {
+  return Array.isArray(value) && value.every((item) => isSanitizedString(item, source));
+}
+
+function isMetadataValue(value: unknown, source: string): boolean {
   return (
-    typeof value === 'string' ||
+    isSanitizedString(value, source) ||
     typeof value === 'number' ||
     typeof value === 'boolean' ||
-    isStringList(value) ||
+    isSanitizedStringList(value, source) ||
     (Array.isArray(value) && value.every((item) => typeof item === 'number'))
   );
 }
 
-function isObservedMetadata(value: unknown): boolean {
+function isObservedMetadata(value: unknown, source: string): boolean {
   if (!isRecord(value)) return false;
   return Object.entries(value).every(
     ([key, item]) =>
       /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(key) &&
       !/(?:raw|pdf|transient)?url$/i.test(key) &&
-      isMetadataValue(item),
+      isMetadataValue(item, source),
   );
 }
 
@@ -131,21 +135,22 @@ function isCaptureSubmission(value: unknown): value is CaptureSubmission {
   if (!isRecord(value) || !hasOnlyKeys(value, SUBMISSION_KEYS)) return false;
   if (value.adapterVersion !== 'bofa-html-v1' || !isRecord(value.document)) return false;
   const document = value.document;
-  if (!hasOnlyKeys(document, DOCUMENT_KEYS) || !isCanonicalBofaUrl(document.sanitizedSource)) {
+  const source = document.sanitizedSource;
+  if (!hasOnlyKeys(document, DOCUMENT_KEYS) || !isCanonicalBofaUrl(source)) {
     return false;
   }
   return (
     document.schema === 'fin-report-clipper/capture-v1' &&
     document.provider === 'BofA Global Research' &&
     (document.sourceType === 'html' || document.sourceType === 'html+pdf') &&
-    isSafeSourceId(document.sourceId, document.sanitizedSource) &&
-    (document.title === undefined || typeof document.title === 'string') &&
-    (document.publishedAt === undefined || typeof document.publishedAt === 'string') &&
-    (document.authors === undefined || isStringList(document.authors)) &&
-    (document.companies === undefined || isStringList(document.companies)) &&
-    (document.tickers === undefined || isStringList(document.tickers)) &&
-    isObservedMetadata(document.observedMetadata) &&
-    typeof document.originalMarkdown === 'string' &&
+    isSafeSourceId(document.sourceId, source) &&
+    (document.title === undefined || isSanitizedString(document.title, source)) &&
+    (document.publishedAt === undefined || isSanitizedString(document.publishedAt, source)) &&
+    (document.authors === undefined || isSanitizedStringList(document.authors, source)) &&
+    (document.companies === undefined || isSanitizedStringList(document.companies, source)) &&
+    (document.tickers === undefined || isSanitizedStringList(document.tickers, source)) &&
+    isObservedMetadata(document.observedMetadata, source) &&
+    isSanitizedString(document.originalMarkdown, source) &&
     isValidTimestamp(document.capturedAt) &&
     typeof document.contentHash === 'string' &&
     /^sha256:[a-f0-9]{64}$/.test(document.contentHash) &&

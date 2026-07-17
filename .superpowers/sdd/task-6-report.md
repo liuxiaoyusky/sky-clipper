@@ -122,3 +122,70 @@ does not add URL discovery/queues, browser control, or tab closing. The session 
 only a generated timestamp, raw sender/page/PDF URLs remain transient, and no external error,
 status, storage record, or log receives them. Startup recovery is intentionally scoped to the
 single service-worker lifecycle and Chrome's `storage.session` lifetime.
+
+## Review 2 follow-up: RED -> GREEN
+
+### RED
+
+Added regressions before implementation for:
+
+- a query-only navigation that keeps the old source ID temporarily, then receives the new source
+  ID and must cancel both old generations before recapture;
+- startup recovery ordering (`session.get` -> settle archive downloads -> sweep -> clear lease),
+  authoritative in-progress archive download polling, and bounded timeout blocking;
+- recursive persisted/display string validation for title, lists, metadata strings/string lists,
+  and original Markdown, while retaining a public contact email in the original body.
+
+Focused command:
+
+```sh
+npm test -- tests/research/capture-service.test.ts tests/research/observe.test.ts tests/research/status.test.ts tests/research/archive-writer.test.ts tests/research/chrome-archive-io.test.ts
+```
+
+Result: FAIL as expected — the original code neither waited for in-progress archive downloads nor
+validated nested persisted strings, and query-only navigation could retain the old generation.
+A final one-test RED then tightened recovery output from a dynamic redacted detail to the fixed
+`Capture recovery failed` string.
+
+### GREEN
+
+- History API, `popstate`, and `hashchange` now force a fresh generation even if the sanitized key
+  is unchanged. A bounded `MutationObserver` identity check restarts capture when the BofA source ID
+  changes; generation/run-key checks remain before probing, extraction, sending, and result apply.
+- Startup reconciliation calls `chrome.downloads.search` with the fixed archive-root filename regex
+  and `state: 'in_progress'`, polling at most 20 times at 250 ms intervals. Only after it observes
+  no active archive downloads does it sweep history and clear a recovered session lease. Timeout or
+  search failure leaves the rejected startup promise in place, so capture remains blocked and
+  returns the fixed recovery error. The lease retains only `startedAt`; download IDs and URLs are
+  not persisted.
+- Capture-message validation now requires `sanitizeTextContent(value, sanitizedSource) === value`
+  for every persisted/display string recursively, but leaves public contact emails unchanged.
+
+This uses the existing Chrome type contract: `chrome.downloads.search({ filenameRegex, state })`
+returns archive `DownloadItem` records, and only their in-progress state/count controls the bounded
+barrier. No URL is read into a lease or surfaced in a status/error.
+
+Final verification:
+
+```sh
+npm test -- tests/research/capture-service.test.ts tests/research/observe.test.ts tests/research/status.test.ts tests/research/archive-writer.test.ts tests/research/chrome-archive-io.test.ts
+# PASS: 5 files, 28 tests
+npm test
+# PASS: 12 files, 69 tests
+npm run compile
+# PASS
+npm run build
+# PASS
+git diff --check
+# PASS
+```
+
+The built manifest remains BofA-only and the built content-script ASCII scan has no matches.
+
+## Review 2 self-review
+
+The new recovery polling is intentionally a fixed-root, fixed-time barrier, not a URL queue. It
+does not cancel or manipulate an active Chrome download; it waits for Chrome to settle it before
+cleanup. No tab is closed and no browser automation is added. Real download restart behavior is
+still not exercised against a live Chrome profile; synthetic download ports cover the supported
+type-level search contract and timeout behavior.

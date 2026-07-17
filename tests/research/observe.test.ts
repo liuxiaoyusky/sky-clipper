@@ -58,4 +58,17 @@ describe('page observation', () => {
     expect(controller.isCurrent(firstGeneration, firstKey)).toBe(false);
     expect(controller.isCurrent(secondGeneration, secondKey)).toBe(true);
   });
+
+  it('invalidates a query-only navigation before the new source ID is observed', () => {
+    const controller = createRunController();
+    const staleKey = bofaRunKey('https://rsch.baml.com/r?q=first-report', 'BOFA-1');
+    const staleGeneration = controller.start(staleKey);
+    const navigationGeneration = controller.start(staleKey);
+    const recaptureKey = bofaRunKey('https://rsch.baml.com/r?q=second-report', 'BOFA-2');
+    const recaptureGeneration = controller.start(recaptureKey);
+
+    expect(controller.isCurrent(staleGeneration, staleKey)).toBe(false);
+    expect(controller.isCurrent(navigationGeneration, staleKey)).toBe(false);
+    expect(controller.isCurrent(recaptureGeneration, recaptureKey)).toBe(true);
+  });
 });
