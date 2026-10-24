@@ -195,15 +195,22 @@ function fixtureRoot(
 function validManifest(overrides: Record<string, unknown> = {}) {
   return {
     manifest_version: 3,
-    name: 'Fin-report-clipper',
+    name: '自动保存版本',
     minimum_chrome_version: '116',
-    permissions: ['downloads', 'offscreen', 'storage'],
-    host_permissions: ['https://rsch.baml.com/*'],
+    permissions: ['alarms', 'downloads', 'offscreen', 'storage'],
+    host_permissions: ['https://rsch.baml.com/*', 'https://markets.ml.com/*', 'https://x.com/*', 'https://twitter.com/*', 'https://pbs.twimg.com/*', 'https://mp.weixin.qq.com/*', 'https://mmbiz.qpic.cn/*', 'https://mmbiz.qlogo.cn/*', 'https://www.bilibili.com/*', 'https://api.bilibili.com/*', 'https://aisubtitle.hdslb.com/*', 'https://i0.hdslb.com/*', 'https://i1.hdslb.com/*', 'https://i2.hdslb.com/*'],
     content_scripts: [
       {
         matches: ['https://rsch.baml.com/*'],
         js: ['content-scripts/content.js'],
       },
+      {
+        matches: ['https://markets.ml.com/researchlibrary/advancedsearch*'],
+        js: ['content-scripts/markets-today.js'],
+      },
+      { matches: ['https://x.com/*', 'https://twitter.com/*'], js: ['content-scripts/x.js'] },
+      { matches: ['https://mp.weixin.qq.com/s*'], js: ['content-scripts/wechat.js'] },
+      { matches: ['https://www.bilibili.com/video/*'], js: ['content-scripts/bilibili.js'] },
     ],
     ...overrides,
   };
@@ -282,6 +289,13 @@ describe('Chrome-only automation', () => {
             matches: ['https://rsch.baml.com/*'],
             js: ['content-scripts/content.js', 'content-scripts/extra.js'],
           },
+          {
+            matches: ['https://markets.ml.com/researchlibrary/advancedsearch*'],
+            js: ['content-scripts/markets-today.js'],
+          },
+          { matches: ['https://x.com/*', 'https://twitter.com/*'], js: ['content-scripts/x.js'] },
+      { matches: ['https://mp.weixin.qq.com/s*'], js: ['content-scripts/wechat.js'] },
+      { matches: ['https://www.bilibili.com/video/*'], js: ['content-scripts/bilibili.js'] },
         ],
       },
       'Unexpected content-script JavaScript',

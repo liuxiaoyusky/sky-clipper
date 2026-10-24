@@ -1,0 +1,7 @@
+interface:
+  display_name: "归档研报下载"
+  short_description: "按需安全整理 Downloads 中新下载的金融研报原件"
+  default_prompt: "使用 $archive-fin-reports 预览并安全归档刚下载的研报原件。"
+
+policy:
+  allow_implicit_invocation: true

@@ -84,10 +84,15 @@ export async function writeArchive(
     files,
     warnings,
   };
-  await io.writeText(
-    plan.manifestPath,
-    `${JSON.stringify(manifest, null, 2)}\n`,
-    'application/json;charset=utf-8',
-  );
+  try {
+    await io.writeText(
+      plan.manifestPath,
+      `${JSON.stringify(manifest, null, 2)}\n`,
+      'application/json;charset=utf-8',
+    );
+  } catch (error) {
+    // The archive skill can rebuild this index; do not invalidate irreplaceable originals.
+    warnings.push(`Manifest download failed: ${redactError(error)}`);
+  }
   return { status, warnings, files: files.map((file) => file.path) };
 }

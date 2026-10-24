@@ -38,3 +38,7 @@ credentials.json
 secrets.json
 *.local.json
 .claude/
+
+# 一次性实验区（保留说明文件）
+scratch/*
+!scratch/README.md

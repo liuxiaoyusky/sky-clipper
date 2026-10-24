@@ -4,5 +4,11 @@
     "jsx": "react-jsx",
     "strict": true,
     "noUnusedLocals": false
-  }
+  },
+  "exclude": [
+    "node_modules",
+    ".output",
+    "scratch",
+    "release-assets"
+  ]
 }

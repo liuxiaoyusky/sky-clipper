@@ -1,4 +1,12 @@
-import type { GetPageStatusResponse } from '@/utils/research/messages';
+import { canonicalBilibiliUrl } from '@/utils/social/bilibili';
+import { canonicalWechatUrl } from '@/utils/social/wechat';
+import { canonicalXUrl } from '@/utils/social/x';
+import type { BatchUiState } from '@/utils/research/batch-queue';
+import type {
+  BatchUiRequest,
+  BatchUiResponse,
+  GetPageStatusResponse,
+} from '@/utils/research/messages';
 import type { ResearchSettings } from '@/utils/research/settings';
 import type { PageStatus } from '@/utils/research/types';
 
@@ -104,16 +112,16 @@ export async function readPageStatus(dependencies: PageStatusDependencies): Prom
   } catch {
     return status('needs-action', '无法读取当前标签页，请关闭弹窗后重试');
   }
-  if (tab?.id == null || !isBofaUrl(tab.url)) {
-    return status('unsupported', '当前页面不是已支持的 BofA 研报');
+  if (tab?.id == null || (!isBofaUrl(tab.url) && !canonicalXUrl(tab.url || '') && !canonicalWechatUrl(tab.url || '') && !canonicalBilibiliUrl(tab.url || ''))) {
+    return status('unsupported', '当前页面不是已支持的 BofA 研报、X 原文、公众号文章或 B站视频');
   }
   try {
     const response = await dependencies.sendToTab(tab.id);
     return response?.ok
       ? response.status
-      : status('needs-action', '无法连接当前 BofA 研报页面，请刷新当前页面后重试');
+      : status('needs-action', '无法连接当前原文页面，请刷新当前页面后重试');
   } catch {
-    return status('needs-action', '无法连接当前 BofA 研报页面，请刷新当前页面后重试');
+    return status('needs-action', '无法连接当前原文页面，请刷新当前页面后重试');
   }
 }
 
@@ -122,6 +130,83 @@ export interface PageStatusPoller {
   refresh(): void;
   invalidate(): void;
   stop(): void;
+}
+
+export async function requestBatchUiState(
+  request: BatchUiRequest,
+  send: (request: BatchUiRequest) => Promise<BatchUiResponse | undefined>,
+): Promise<BatchUiState> {
+  const response = await send(request);
+  if (!response?.ok) throw new Error(response?.reason || '无法读取批量任务状态');
+  return response.state;
+}
+
+export interface BatchStatePoller {
+  start(): void;
+  refresh(): void;
+  stop(): void;
+}
+
+export function createBatchStatePoller(dependencies: {
+  read(): Promise<BatchUiState>;
+  publish(state: BatchUiState): void;
+  onError(message: string): void;
+  schedule(callback: () => void, delay: number): number;
+  cancel(timer: number): void;
+  intervalMs?: number;
+}): BatchStatePoller {
+  const intervalMs = dependencies.intervalMs ?? 1000;
+  let active = false;
+  let inFlight = false;
+  let generation = 0;
+  let timer: number | undefined;
+
+  const clearTimer = () => {
+    if (timer !== undefined) dependencies.cancel(timer);
+    timer = undefined;
+  };
+  const poll = async () => {
+    if (!active || inFlight) return;
+    inFlight = true;
+    const runGeneration = ++generation;
+    try {
+      const next = await dependencies.read();
+      if (active && runGeneration === generation) {
+        dependencies.publish(next);
+        dependencies.onError('');
+      }
+    } catch (error) {
+      if (active && runGeneration === generation) {
+        dependencies.onError(error instanceof Error ? error.message : '无法读取批量任务状态');
+      }
+    } finally {
+      inFlight = false;
+      if (active) {
+        timer = dependencies.schedule(() => {
+          timer = undefined;
+          void poll();
+        }, intervalMs);
+      }
+    }
+  };
+
+  return {
+    start() {
+      if (active) return;
+      active = true;
+      void poll();
+    },
+    refresh() {
+      if (!active) return;
+      clearTimer();
+      if (!inFlight) void poll();
+    },
+    stop() {
+      active = false;
+      generation += 1;
+      clearTimer();
+    },
+  };
 }
 
 export function createPageStatusPoller(dependencies: {

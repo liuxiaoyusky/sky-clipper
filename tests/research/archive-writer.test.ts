@@ -225,7 +225,29 @@ describe('archive writer', () => {
     expect(calls[0].content).toContain('capture_status: complete');
   });
 
-  it('rolls back a completed manifest when its exact download-history cleanup fails', async () => {
+  it('keeps a complete original capture when the rebuildable manifest fails', async () => {
+    const { io, calls } = fakeIo();
+    const manifestFailureIo: ArchiveIo = {
+      ...io,
+      async writeText(path, content, mime) {
+        await io.writeText(path, content, mime);
+        if (path === plan.manifestPath) {
+          throw new Error(`manifest blocked ${submission.transientPdfUrl}`);
+        }
+      },
+    };
+
+    const result = await writeArchive(plan, submission, manifestFailureIo);
+
+    expect(result.status).toBe('complete');
+    expect(result.files).toEqual([plan.originalMarkdownPath, plan.originalPdfPath]);
+    expect(result.warnings).toEqual([
+      'Manifest download failed: manifest blocked [redacted-url]',
+    ]);
+    expect(calls.at(-1)?.path).toBe(plan.manifestPath);
+  });
+
+  it('rolls back a manifest whose exact download-history cleanup fails', async () => {
     const savedFiles = new Map<string, string>();
     const blobs = new Map<string, string>();
     const filenames = new Map<number, string>();
@@ -244,6 +266,7 @@ describe('archive writer', () => {
           {
             id,
             state: 'complete',
+            filename: `/Downloads/${filenames.get(id)}`,
             mime: filenames.get(id)?.endsWith('.pdf') ? 'application/pdf' : 'text/markdown',
           },
         ]),
@@ -282,16 +305,18 @@ describe('archive writer', () => {
       },
     });
 
-    const result = writeArchive(plan, submission, createChromeArchiveIo());
+    const result = await writeArchive(plan, submission, createChromeArchiveIo());
 
-    await expect(result).rejects.toThrow('Archive download cleanup failed');
-    await expect(result).rejects.not.toThrow('private-marker-url');
+    expect(result.status).toBe('complete');
+    expect(result.warnings).toEqual([
+      'Manifest download failed: Archive download cleanup failed',
+    ]);
     expect(savedFiles.get(plan.originalPdfPath || '')).toBe('PDF');
     expect(savedFiles.has(plan.manifestPath)).toBe(false);
     expect(removedIds).toEqual([4]);
   });
 
-  it('rolls back a completed manifest when Blob revoke and offscreen close both fail', async () => {
+  it('keeps complete originals when manifest Blob cleanup fails', async () => {
     const savedFiles = new Map<string, string>();
     const blobs = new Map<string, string>();
     const filenames = new Map<number, string>();
@@ -314,6 +339,7 @@ describe('archive writer', () => {
           {
             id,
             state: 'complete',
+            filename: `/Downloads/${filenames.get(id)}`,
             mime: filenames.get(id)?.endsWith('.pdf') ? 'application/pdf' : 'text/markdown',
           },
         ]),
@@ -360,11 +386,12 @@ describe('archive writer', () => {
       },
     });
 
-    const result = writeArchive(plan, submission, createChromeArchiveIo());
+    const result = await writeArchive(plan, submission, createChromeArchiveIo());
 
-    await expect(result).rejects.toThrow('Archive Blob cleanup failed');
-    await expect(result).rejects.not.toThrow('private-blob-url');
-    await expect(result).rejects.not.toThrow('private-close-detail');
+    expect(result.status).toBe('complete');
+    expect(result.warnings).toEqual([
+      'Manifest download failed: Archive Blob cleanup failed',
+    ]);
     expect(savedFiles.get(plan.originalPdfPath || '')).toBe('PDF');
     expect(savedFiles.has(plan.manifestPath)).toBe(false);
     expect(removedIds).toEqual([4]);

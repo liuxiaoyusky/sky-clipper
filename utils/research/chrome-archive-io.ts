@@ -2,12 +2,25 @@ import type { CreateBlobRequest, RevokeBlobRequest } from './messages';
 import type { ArchiveIo } from './archive-writer';
 
 const OFFSCREEN_PATH = 'offscreen.html';
-const ARCHIVE_FILENAME_RE = 'Fin-report-clipper Backup';
-const SAFE_ARCHIVE_PREFIX = `${ARCHIVE_FILENAME_RE}/`;
+const ARCHIVE_FILENAME_RE = String.raw`(?:^|[/\\])(?:Fin-report-clipper Backup|Sky-Clipper Backup[/\\](?:X|WeChat|Bilibili))[/\\]`;
+const SAFE_ARCHIVE_PREFIXES = ['Fin-report-clipper Backup/', 'Sky-Clipper Backup/X/', 'Sky-Clipper Backup/WeChat/', 'Sky-Clipper Backup/Bilibili/'];
 const DOWNLOAD_CLEANUP_ERROR = 'Archive download cleanup failed';
 const BLOB_CLEANUP_ERROR = 'Archive Blob cleanup failed';
 const DOWNLOAD_RECOVERY_TIMEOUT_ERROR = 'Archive download recovery timed out';
 let creatingOffscreen: Promise<void> | null = null;
+// Another extension's naming listener can suppress download({ filename }).
+// Keep URLs only for the active, serialized archive operation.
+const pendingFilenames = new Map<string, string>();
+
+export function registerArchiveDownloadFilenames(): void {
+  chrome.downloads.onDeterminingFilename.addListener((item, suggest) => {
+    const filename = item.byExtensionId === chrome.runtime.id
+      ? pendingFilenames.get(item.url)
+      : undefined;
+    if (filename) suggest({ filename, conflictAction: 'overwrite' });
+    else suggest();
+  });
+}
 
 export async function eraseArchiveDownloadHistory(): Promise<void> {
   await chrome.downloads.erase({ filenameRegex: ARCHIVE_FILENAME_RE });
@@ -46,7 +59,7 @@ export async function waitForArchiveDownloadsToSettle(
 
 function isSafeArchiveFilename(path: string): boolean {
   return (
-    path.startsWith(SAFE_ARCHIVE_PREFIX) &&
+    SAFE_ARCHIVE_PREFIXES.some((prefix) => path.startsWith(prefix)) &&
     !path.includes('\\') &&
     !path.split('/').some((part) => part === '' || part === '.' || part === '..') &&
     !/[\u0000-\u001f\u007f:?*"<>|#[\]]/.test(path)
@@ -121,15 +134,25 @@ async function download(
   eraseHistoryOnSuccess = true,
 ): Promise<number> {
   if (!isSafeArchiveFilename(path)) throw new Error('Unsafe archive download filename');
-  const downloadId = await chrome.downloads.download({
-    url,
-    filename: path,
-    conflictAction: 'overwrite',
-    saveAs: false,
-  });
+  pendingFilenames.set(url, path);
+  let downloadId: number;
+  try {
+    downloadId = await chrome.downloads.download({
+      url,
+      filename: path,
+      conflictAction: 'overwrite',
+      saveAs: false,
+    });
+  } catch (error) {
+    pendingFilenames.delete(url);
+    throw error;
+  }
   let operationError: unknown;
   try {
     const item = await waitForDownload(downloadId);
+    if (!item.filename?.replace(/\\/g, '/').endsWith(`/${path}`)) {
+      throw new Error('Archive download filename changed');
+    }
     if (
       expectedMimePrefix &&
       !item.mime?.toLowerCase().startsWith(expectedMimePrefix.toLowerCase())
@@ -138,6 +161,8 @@ async function download(
     }
   } catch (error) {
     operationError = error;
+  } finally {
+    pendingFilenames.delete(url);
   }
 
   if (operationError) {

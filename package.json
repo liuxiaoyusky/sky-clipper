@@ -1,19 +1,21 @@
 {
   "name": "fin-report-clipper",
-  "displayName": "Fin-report-clipper",
-  "description": "在 Chrome 中自动识别并归档受支持的金融研报",
-  "version": "0.1.0",
+  "displayName": "自动保存版本",
+  "description": "在 Chrome 中自动保存研报、X、微信公众号原文图片与 B站平台字幕",
+  "version": "0.4.2",
   "type": "module",
   "scripts": {
+    "bofa:today": "wxt",
     "dev": "wxt",
     "build": "wxt build",
     "zip": "wxt zip",
     "compile": "tsc --noEmit",
     "test": "vitest run",
+    "test:archive-skill": "python3 -B -m unittest tests/skills/test_archive_downloads.py",
     "test:watch": "vitest",
     "check:ascii": "node scripts/check-content-ascii.mjs",
     "check:manifest": "node scripts/check-manifest.mjs",
-    "verify": "npm test && npm run compile && npm run build && npm run check:ascii && npm run check:manifest",
+    "verify": "npm test && npm run test:archive-skill && npm run compile && npm run build && npm run check:ascii && npm run check:manifest",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
@@ -27,6 +29,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/turndown": "^5.0.6",
+    "@vitejs/plugin-react": "4.7.0",
     "@wxt-dev/module-react": "^1.1.3",
     "jsdom": "^29.1.1",
     "typescript": "^5.7.2",

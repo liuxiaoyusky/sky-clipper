@@ -15,5 +15,5 @@ export function presentPageStatus(code: PageStatusCode): PresentedStatus {
     return { label: '正在保存', tone: 'working' };
   }
   if (code === 'disabled') return { label: '自动捕获已关闭', tone: 'neutral' };
-  return { label: '未识别为支持的研报', tone: 'neutral' };
+  return { label: '当前页面暂不支持', tone: 'neutral' };
 }

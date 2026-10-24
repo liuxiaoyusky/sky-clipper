@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createChromeArchiveIo,
+  registerArchiveDownloadFilenames,
   eraseArchiveDownloadHistory,
   waitForArchiveDownloadsToSettle,
 } from '@/utils/research/chrome-archive-io';
@@ -8,20 +9,27 @@ import {
 interface SimulatedDownload {
   state: 'complete' | 'interrupted';
   mime?: string;
+  filename?: string;
   error?: string;
 }
 
 function installDownloads(item: SimulatedDownload) {
-  const download = vi.fn(async () => 42);
-  const search = vi.fn(async () => [{ id: 42, ...item }]);
+  let requestedPath = '';
+  const download = vi.fn(async (options: chrome.downloads.DownloadOptions) => {
+    requestedPath = options.filename || '';
+    return 42;
+  });
+  const search = vi.fn(async () => [{ id: 42, filename: `/Downloads/${requestedPath}`, ...item }]);
   const removeFile = vi.fn(async () => undefined);
-  const erase = vi.fn(async () => [42]);
+  const erase = vi.fn(async (_query: chrome.downloads.DownloadQuery) => [42]);
   vi.stubGlobal('chrome', {
+    runtime: { id: 'our-extension' },
     downloads: {
       download,
       search,
       removeFile,
       erase,
+      onDeterminingFilename: { addListener: vi.fn() },
       onChanged: {
         addListener: vi.fn(),
         removeListener: vi.fn(),
@@ -36,6 +44,46 @@ afterEach(() => {
 });
 
 describe('Chrome archive downloads', () => {
+  it('accepts only the dedicated WeChat directory and verifies image MIME', async () => {
+    const mocks = installDownloads({ state: 'complete', mime: 'image/png' });
+    await createChromeArchiveIo().downloadUrl('Sky-Clipper Backup/WeChat/short-fixture/hash/images/001.png', 'https://mmbiz.qpic.cn/fixture/640?wx_fmt=png', 'image/');
+    expect(mocks.removeFile).not.toHaveBeenCalled();
+    await expect(createChromeArchiveIo().downloadUrl('Sky-Clipper Backup/WeChat/../manual.txt', 'https://mmbiz.qpic.cn/fixture/640', 'image/')).rejects.toThrow('Unsafe');
+  });
+  it('rejects a completed download saved under the wrong filename', async () => {
+    const mocks = installDownloads({ state: 'complete', mime: 'image/jpeg', filename: '/Downloads/random.jpeg' });
+    await expect(createChromeArchiveIo().downloadUrl(
+      'Sky-Clipper Backup/X/123/hash/images/001.jpg', 'https://pbs.twimg.com/media/test', 'image/',
+    )).rejects.toThrow('Archive download filename changed');
+    expect(mocks.removeFile).toHaveBeenCalledWith(42);
+    expect(mocks.erase).toHaveBeenCalledWith({ id: 42 });
+  });
+
+  it('suggests names only for its own active downloads, then forgets the URL', async () => {
+    const mocks = installDownloads({ state: 'complete', mime: 'image/jpeg' });
+    registerArchiveDownloadFilenames();
+    const listener = vi.mocked(chrome.downloads.onDeterminingFilename.addListener).mock.calls[0][0];
+    const url = 'https://pbs.twimg.com/media/test';
+    const filename = 'Sky-Clipper Backup/X/123/hash/images/001.jpg';
+    const original = mocks.download.getMockImplementation()!;
+    mocks.download.mockImplementationOnce(async (options) => {
+      const suggest = vi.fn();
+      listener({ url, byExtensionId: 'our-extension' } as chrome.downloads.DownloadItem, suggest);
+      expect(suggest).toHaveBeenCalledExactlyOnceWith({ filename, conflictAction: 'overwrite' });
+      const other = vi.fn();
+      listener({ url, byExtensionId: 'other-extension' } as chrome.downloads.DownloadItem, other);
+      expect(other).toHaveBeenCalledExactlyOnceWith();
+      const unknown = vi.fn();
+      listener({ url: 'https://example.com/unrelated', byExtensionId: 'our-extension' } as chrome.downloads.DownloadItem, unknown);
+      expect(unknown).toHaveBeenCalledExactlyOnceWith();
+      return original(options);
+    });
+    await createChromeArchiveIo().downloadUrl(filename, url, 'image/');
+    const stale = vi.fn();
+    listener({ url, byExtensionId: 'our-extension' } as chrome.downloads.DownloadItem, stale);
+    expect(stale).toHaveBeenCalledExactlyOnceWith();
+  });
+
   it('keeps a valid PDF file but erases its signed download-history entry', async () => {
     const mocks = installDownloads({ state: 'complete', mime: 'application/pdf' });
     await createChromeArchiveIo().downloadUrl(
@@ -130,6 +178,15 @@ describe('Chrome archive downloads', () => {
     expect(mocks.erase).toHaveBeenCalledWith({
       filenameRegex: expect.stringContaining('Fin-report-clipper Backup'),
     });
+    const regex = new RegExp(mocks.erase.mock.calls[0][0].filenameRegex!);
+    expect(regex.test('/Downloads/Fin-report-clipper Backup/BofA/report.pdf')).toBe(true);
+    expect(regex.test('/Downloads/Sky-Clipper Backup/X/123/original.md')).toBe(true);
+    expect(regex.test('/Downloads/Sky-Clipper Backup/WeChat/short-fixture/original.md')).toBe(true);
+    expect(regex.test('/Downloads/Sky-Clipper Backup/WeChat-other/manual.txt')).toBe(false);
+    expect(regex.test(String.raw`C:\Downloads\Sky-Clipper Backup\X\123\original.md`)).toBe(true);
+    expect(regex.test('/Downloads/notes/Fin-report-clipper Backup planning.pdf')).toBe(false);
+    expect(regex.test('/Downloads/Sky-Clipper Backup/other-folder/manual.txt')).toBe(false);
+
   });
 
   it('waits for in-progress archive downloads to settle before recovery', async () => {

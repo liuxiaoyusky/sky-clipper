@@ -33,7 +33,8 @@ describe('research-only product boundary', () => {
     expect(popupSource).toContain('FIN_REPORT_CLIPPER_GET_PAGE_STATUS');
     expect(popupSource).toContain('自动捕获');
     expect(popupSource).toContain('BofA Global Research');
-    expect(popupSource).toContain('Downloads/Fin-report-clipper Backup/');
+    expect(popupSource).toContain('研报 → Fin-report-clipper Backup/');
+    expect(popupSource).toContain('X → Sky-Clipper Backup/X/');
     expect(popupSource).not.toMatch(/ZHAOJI_CLIPPER|Obsidian|飞书|高亮|选区|普通网页剪藏/);
 
     const runtimeSource = [

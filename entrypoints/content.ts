@@ -1,9 +1,13 @@
 import { bofaAdapter } from '@/utils/research/adapters/bofa';
 import {
+  isDiscoverCurrentPageRequest,
   isGetPageStatusRequest,
   type CaptureRequest,
+  type DiscoverCurrentPageResponse,
   type GetPageStatusResponse,
 } from '@/utils/research/messages';
+import { discoverBofaReportLinks } from '@/utils/research/entry-discovery';
+import { createDocumentBatchPageStatusRequest } from '@/utils/research/batch-page-status';
 import {
   bofaDomIdentity,
   bofaRunKey,
@@ -27,10 +31,15 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     const scheduler = createNavigationCaptureScheduler();
+    const createBatchPageStatusRequest = createDocumentBatchPageStatusRequest(location.hash);
     let status: PageStatus = {
       code: 'observing',
       message: '正在识别当前研报页面',
       updatedAt: new Date().toISOString(),
+    };
+
+    const publishBatchStatus = () => {
+      void chrome.runtime.sendMessage(createBatchPageStatusRequest(status)).catch(() => {});
     };
 
     const setStatus = (
@@ -39,6 +48,7 @@ export default defineContentScript({
       extra: Partial<PageStatus> = {},
     ) => {
       status = { code, message, updatedAt: new Date().toISOString(), ...extra };
+      publishBatchStatus();
     };
 
     const applyResult = (result: CaptureResult, title?: string) => {
@@ -142,8 +152,15 @@ export default defineContentScript({
     };
 
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      if (!isGetPageStatusRequest(message)) return false;
-      sendResponse({ ok: true, status } satisfies GetPageStatusResponse);
+      if (isGetPageStatusRequest(message)) {
+        sendResponse({ ok: true, status } satisfies GetPageStatusResponse);
+        return false;
+      }
+      if (isDiscoverCurrentPageRequest(message)) {
+        const result = discoverBofaReportLinks(document, location.href);
+        sendResponse({ ok: true, ...result } satisfies DiscoverCurrentPageResponse);
+        return false;
+      }
       return false;
     });
 
@@ -182,5 +199,6 @@ export default defineContentScript({
     window.setInterval(syncNavigation, 250);
 
     startCapture(scheduler.begin(location.href, readDomIdentity(), readRunKey()));
+    publishBatchStatus();
   },
 });

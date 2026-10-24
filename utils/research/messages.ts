@@ -1,5 +1,8 @@
-import type { CaptureSubmission, PageStatus } from './types';
+import type { BatchUiState } from './batch-queue';
+import type { DiscoveredReportLink } from './entry-discovery';
+import type { CaptureSubmission, PageStatus, PageStatusCode } from './types';
 import { canonicalizeBofaUrl, sanitizeTextContent } from './privacy';
+import { isMarketsTodayEntryUrl } from './markets-today';
 
 export interface CaptureRequest {
   target: 'background';
@@ -16,6 +19,71 @@ export interface GetPageStatusResponse {
   ok: true;
   status: PageStatus;
 }
+
+export interface DiscoverCurrentPageRequest {
+  target: 'content';
+  type: 'FIN_REPORT_CLIPPER_DISCOVER_CURRENT_PAGE';
+}
+
+export interface DiscoverCurrentPageResponse {
+  ok: true;
+  links: DiscoveredReportLink[];
+  truncated: boolean;
+}
+
+export interface BatchPageStatusRequest {
+  target: 'background';
+  type: 'FIN_REPORT_CLIPPER_BATCH_PAGE_STATUS';
+  navigationToken?: string;
+  status: PageStatus;
+}
+
+export interface MarketsTodayDraftRequest {
+  target: 'background';
+  type: 'FIN_REPORT_CLIPPER_MARKETS_TODAY_DRAFT';
+  runId: string;
+  links: DiscoveredReportLink[];
+  truncated: boolean;
+}
+
+export interface MarketsTodayRunClaimRequest {
+  target: 'background';
+  type: 'FIN_REPORT_CLIPPER_MARKETS_TODAY_RUN_CLAIM';
+}
+
+export interface MarketsTodayRunMutationRequest {
+  target: 'background';
+  type:
+    | 'FIN_REPORT_CLIPPER_MARKETS_TODAY_RUN_ISSUE_SEARCH'
+    | 'FIN_REPORT_CLIPPER_MARKETS_TODAY_RUN_STOP';
+  runId: string;
+}
+
+export type MarketsTodayRunMutationResponse =
+  | { ok: true }
+  | { ok: false; reason: string };
+
+export type MarketsTodayRunClaimResponse =
+  | { ok: true; action: 'start' | 'resume'; runId: string }
+  | { ok: true; action: 'wait' | 'skip'; reason: string }
+  | { ok: false; reason: string };
+
+export type BatchUiRequest =
+  | { target: 'background'; type: 'FIN_REPORT_CLIPPER_BATCH_SCAN_ACTIVE_PAGE' }
+  | { target: 'background'; type: 'FIN_REPORT_CLIPPER_BATCH_GET_STATE' }
+  | {
+      target: 'background';
+      type: 'FIN_REPORT_CLIPPER_BATCH_CONFIRM_DISCOVERY';
+      selectedIds: string[];
+    }
+  | { target: 'background'; type: 'FIN_REPORT_CLIPPER_BATCH_CLEAR_DISCOVERY' }
+  | { target: 'background'; type: 'FIN_REPORT_CLIPPER_BATCH_PAUSE' }
+  | { target: 'background'; type: 'FIN_REPORT_CLIPPER_BATCH_RESUME' }
+  | { target: 'background'; type: 'FIN_REPORT_CLIPPER_BATCH_CANCEL' };
+
+export type BatchUiResponse =
+  | { ok: true; state: BatchUiState }
+  | { ok: false; reason: string };
 
 export interface CreateBlobRequest {
   target: 'offscreen';
@@ -49,6 +117,19 @@ const DOCUMENT_KEYS = new Set([
   'capturedAt',
   'contentHash',
   'captureStatus',
+]);
+const PAGE_STATUS_CODES = new Set<PageStatusCode>([
+  'observing',
+  'waiting-ready',
+  'extracting',
+  'saving',
+  'saved',
+  'duplicate',
+  'partial',
+  'needs-action',
+  'failed',
+  'disabled',
+  'unsupported',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -131,6 +212,21 @@ function isTransientBofaPdfUrl(value: unknown): value is string {
   }
 }
 
+function isTransientBofaReportUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'rsch.baml.com' &&
+      (url.pathname === '/r' || url.pathname === '/report') &&
+      (url.pathname !== '/r' || Boolean(url.searchParams.get('q')?.trim()))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function isCaptureSubmission(value: unknown): value is CaptureSubmission {
   if (!isRecord(value) || !hasOnlyKeys(value, SUBMISSION_KEYS)) return false;
   if (value.adapterVersion !== 'bofa-html-v1' || !isRecord(value.document)) return false;
@@ -183,4 +279,177 @@ export function isGetPageStatusRequest(message: unknown): message is GetPageStat
   if (!message || typeof message !== 'object') return false;
   const value = message as Partial<GetPageStatusRequest>;
   return value.target === 'content' && value.type === 'FIN_REPORT_CLIPPER_GET_PAGE_STATUS';
+}
+
+export function isDiscoverCurrentPageRequest(
+  message: unknown,
+): message is DiscoverCurrentPageRequest {
+  if (!isRecord(message) || !hasOnlyKeys(message, new Set(['target', 'type']))) return false;
+  return (
+    message.target === 'content' &&
+    message.type === 'FIN_REPORT_CLIPPER_DISCOVER_CURRENT_PAGE'
+  );
+}
+
+function isPageStatus(value: unknown): value is PageStatus {
+  if (!isRecord(value) || !hasOnlyKeys(value, new Set([
+    'code',
+    'message',
+    'title',
+    'archivePath',
+    'updatedAt',
+  ]))) {
+    return false;
+  }
+  return (
+    typeof value.code === 'string' &&
+    PAGE_STATUS_CODES.has(value.code as PageStatusCode) &&
+    typeof value.message === 'string' &&
+    value.message.length <= 500 &&
+    typeof value.updatedAt === 'string' &&
+    isValidTimestamp(value.updatedAt) &&
+    (value.title === undefined || (typeof value.title === 'string' && value.title.length <= 500)) &&
+    (value.archivePath === undefined ||
+      (typeof value.archivePath === 'string' && value.archivePath.length <= 500))
+  );
+}
+
+export function isBatchPageStatusRequest(message: unknown): message is BatchPageStatusRequest {
+  if (
+    !isRecord(message) ||
+    !hasOnlyKeys(message, new Set(['target', 'type', 'navigationToken', 'status']))
+  ) {
+    return false;
+  }
+  return (
+    message.target === 'background' &&
+    message.type === 'FIN_REPORT_CLIPPER_BATCH_PAGE_STATUS' &&
+    (message.navigationToken === undefined ||
+      (typeof message.navigationToken === 'string' &&
+        /^[A-Za-z0-9_-]{16,80}$/.test(message.navigationToken))) &&
+    isPageStatus(message.status)
+  );
+}
+
+export function isMarketsTodayDraftRequest(
+  message: unknown,
+): message is MarketsTodayDraftRequest {
+  if (
+    !isRecord(message) ||
+    !hasOnlyKeys(message, new Set(['target', 'type', 'runId', 'links', 'truncated'])) ||
+    message.target !== 'background' ||
+    message.type !== 'FIN_REPORT_CLIPPER_MARKETS_TODAY_DRAFT' ||
+    typeof message.runId !== 'string' ||
+    !/^[A-Za-z0-9_-]{8,200}$/.test(message.runId) ||
+    !Array.isArray(message.links) ||
+    message.links.length < 1 ||
+    message.links.length > 20 ||
+    typeof message.truncated !== 'boolean'
+  ) {
+    return false;
+  }
+  const ids = new Set<string>();
+  for (const link of message.links) {
+    if (
+      !isRecord(link) ||
+      !hasOnlyKeys(link, new Set(['id', 'title', 'url'])) ||
+      typeof link.id !== 'string' ||
+      !/^[A-Za-z0-9_-]{1,80}$/.test(link.id) ||
+      ids.has(link.id) ||
+      typeof link.title !== 'string' ||
+      !link.title ||
+      link.title.length > 240 ||
+      typeof link.url !== 'string' ||
+      !isTransientBofaReportUrl(link.url) ||
+      sanitizeTextContent(link.title, link.url) !== link.title
+    ) {
+      return false;
+    }
+    ids.add(link.id);
+  }
+  return true;
+}
+
+export function isMarketsTodayRunClaimRequest(
+  message: unknown,
+): message is MarketsTodayRunClaimRequest {
+  return Boolean(
+    isRecord(message) &&
+      hasOnlyKeys(message, new Set(['target', 'type'])) &&
+      message.target === 'background' &&
+      message.type === 'FIN_REPORT_CLIPPER_MARKETS_TODAY_RUN_CLAIM',
+  );
+}
+
+export function isMarketsTodayRunMutationRequest(
+  message: unknown,
+): message is MarketsTodayRunMutationRequest {
+  return Boolean(
+    isRecord(message) &&
+      hasOnlyKeys(message, new Set(['target', 'type', 'runId'])) &&
+      message.target === 'background' &&
+      (message.type === 'FIN_REPORT_CLIPPER_MARKETS_TODAY_RUN_ISSUE_SEARCH' ||
+        message.type === 'FIN_REPORT_CLIPPER_MARKETS_TODAY_RUN_STOP') &&
+      typeof message.runId === 'string' &&
+      /^[A-Za-z0-9_-]{8,200}$/.test(message.runId),
+  );
+}
+
+export function isMarketsTodaySender(
+  sender: chrome.runtime.MessageSender,
+  extensionId: string,
+): boolean {
+  return Boolean(
+    sender.id === extensionId &&
+      sender.frameId === 0 &&
+      sender.tab?.id !== undefined &&
+      sender.documentId &&
+      sender.url &&
+      sender.tab?.url &&
+      isMarketsTodayEntryUrl(sender.url) &&
+      isMarketsTodayEntryUrl(sender.tab.url),
+  );
+}
+
+const BATCH_UI_TYPES = new Set([
+  'FIN_REPORT_CLIPPER_BATCH_SCAN_ACTIVE_PAGE',
+  'FIN_REPORT_CLIPPER_BATCH_GET_STATE',
+  'FIN_REPORT_CLIPPER_BATCH_CONFIRM_DISCOVERY',
+  'FIN_REPORT_CLIPPER_BATCH_CLEAR_DISCOVERY',
+  'FIN_REPORT_CLIPPER_BATCH_PAUSE',
+  'FIN_REPORT_CLIPPER_BATCH_RESUME',
+  'FIN_REPORT_CLIPPER_BATCH_CANCEL',
+]);
+
+export function isBatchUiRequest(message: unknown): message is BatchUiRequest {
+  if (!isRecord(message) || message.target !== 'background' || typeof message.type !== 'string') {
+    return false;
+  }
+  if (!BATCH_UI_TYPES.has(message.type)) return false;
+  if (message.type === 'FIN_REPORT_CLIPPER_BATCH_CONFIRM_DISCOVERY') {
+    return (
+      hasOnlyKeys(message, new Set(['target', 'type', 'selectedIds'])) &&
+      Array.isArray(message.selectedIds) &&
+      message.selectedIds.length > 0 &&
+      message.selectedIds.length <= 20 &&
+      message.selectedIds.every(
+        (item) => typeof item === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(item),
+      ) &&
+      new Set(message.selectedIds).size === message.selectedIds.length
+    );
+  }
+  return hasOnlyKeys(message, new Set(['target', 'type']));
+}
+
+export function isExtensionUiSender(
+  sender: chrome.runtime.MessageSender,
+  extensionId: string,
+): boolean {
+  if (sender.id !== extensionId || sender.tab || !sender.url) return false;
+  try {
+    const url = new URL(sender.url);
+    return url.protocol === 'chrome-extension:' && url.hostname === extensionId;
+  } catch {
+    return false;
+  }
 }

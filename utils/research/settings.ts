@@ -1,13 +1,15 @@
 export interface ResearchSettings {
   autoCapture: boolean;
-  providers: { bofa: boolean };
+  socialAutoCapture: boolean;
+  providers: { bofa: boolean; x: boolean; wechat: boolean; bilibili: boolean };
 }
 
 export const RESEARCH_SETTINGS_KEY = 'fin_report_clipper_settings';
 
 export const DEFAULT_RESEARCH_SETTINGS: ResearchSettings = {
   autoCapture: true,
-  providers: { bofa: true },
+  socialAutoCapture: true,
+  providers: { bofa: true, x: true, wechat: true, bilibili: true },
 };
 
 export function normalizeResearchSettings(value: unknown): ResearchSettings {
@@ -21,7 +23,11 @@ export function normalizeResearchSettings(value: unknown): ResearchSettings {
       typeof raw.autoCapture === 'boolean'
         ? raw.autoCapture
         : DEFAULT_RESEARCH_SETTINGS.autoCapture,
+    socialAutoCapture: typeof raw.socialAutoCapture === 'boolean' ? raw.socialAutoCapture : true,
     providers: {
+      bilibili: typeof providers.bilibili === 'boolean' ? providers.bilibili : true,
+      wechat: typeof providers.wechat === 'boolean' ? providers.wechat : true,
+      x: typeof providers.x === 'boolean' ? providers.x : true,
       bofa:
         typeof providers.bofa === 'boolean'
           ? providers.bofa
@@ -43,4 +49,16 @@ export async function saveResearchSettings(settings: ResearchSettings): Promise<
 
 export function isBofaAutoCaptureEnabled(settings: ResearchSettings): boolean {
   return settings.autoCapture && settings.providers.bofa;
+}
+
+export function isXAutoCaptureEnabled(settings: ResearchSettings): boolean {
+  return settings.socialAutoCapture && settings.providers.x;
+}
+
+export function isWechatAutoCaptureEnabled(settings: ResearchSettings): boolean {
+  return settings.socialAutoCapture && settings.providers.wechat;
+}
+
+export function isBilibiliAutoCaptureEnabled(settings: ResearchSettings): boolean {
+  return settings.socialAutoCapture && settings.providers.bilibili;
 }

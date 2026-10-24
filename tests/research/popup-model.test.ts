@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createBatchStatePoller,
   createPageStatusPoller,
   createSettingsSaveQueue,
   readPageStatus,
+  requestBatchUiState,
 } from '@/entrypoints/popup/model';
+import type { BatchUiState } from '@/utils/research/batch-queue';
 import type { ResearchSettings } from '@/utils/research/settings';
 import type { PageStatus } from '@/utils/research/types';
 
 const initialSettings: ResearchSettings = {
   autoCapture: true,
-  providers: { bofa: true },
+  socialAutoCapture: true,
+  providers: { bofa: true, x: true, wechat: true, bilibili: true },
 };
 
 function deferred<T>() {
@@ -33,6 +37,59 @@ async function eventually(assertion: () => void): Promise<void> {
 }
 
 describe('popup reliability model', () => {
+  it('reads safe batch state and surfaces background command errors', async () => {
+    const state: BatchUiState = {
+      queue: {
+        status: 'running',
+        currentIndex: 0,
+        total: 1,
+        currentTitle: 'Safe report title',
+        counts: { saved: 0, duplicate: 0, partial: 0, failed: 0, remaining: 1 },
+        items: [{ id: 'report-1', title: 'Safe report title', status: 'opening' }],
+      },
+    };
+    const request = {
+      target: 'background' as const,
+      type: 'FIN_REPORT_CLIPPER_BATCH_GET_STATE' as const,
+    };
+
+    await expect(requestBatchUiState(request, async () => ({ ok: true, state }))).resolves.toBe(
+      state,
+    );
+    await expect(
+      requestBatchUiState(request, async () => ({ ok: false, reason: '队列不可用' })),
+    ).rejects.toThrow('队列不可用');
+  });
+
+  it('stops the batch poller without publishing a late popup result', async () => {
+    const pending = deferred<BatchUiState>();
+    const published: BatchUiState[] = [];
+    const errors: string[] = [];
+    const poller = createBatchStatePoller({
+      read: () => pending.promise,
+      publish: (state) => published.push(state),
+      onError: (message) => errors.push(message),
+      schedule: () => 1,
+      cancel: () => {},
+    });
+
+    poller.start();
+    poller.stop();
+    pending.resolve({
+      queue: {
+        status: 'completed',
+        currentIndex: 1,
+        total: 1,
+        counts: { saved: 1, duplicate: 0, partial: 0, failed: 0, remaining: 0 },
+        items: [{ id: 'report-1', title: 'Report', status: 'saved' }],
+      },
+    });
+    await Promise.resolve();
+
+    expect(published).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
   it('serializes rapid settings patches against the latest committed settings', async () => {
     const writes: ResearchSettings[] = [];
     const firstWrite = deferred<void>();
@@ -54,14 +111,14 @@ describe('popup reliability model', () => {
     await eventually(() =>
       expect(writes).toEqual([
         { ...initialSettings, autoCapture: false },
-        { autoCapture: false, providers: { bofa: false } },
+        { autoCapture: false, socialAutoCapture: true, providers: { bofa: false, x: true, wechat: true, bilibili: true } },
       ]),
     );
     secondWrite.resolve();
     await Promise.all([first, second]);
 
     expect(queue.getState()).toMatchObject({
-      settings: { autoCapture: false, providers: { bofa: false } },
+      settings: { autoCapture: false, socialAutoCapture: true, providers: { bofa: false, x: true, wechat: true, bilibili: true } },
       saving: false,
     });
     expect(queue.getState().error).toBeUndefined();
@@ -100,7 +157,7 @@ describe('popup reliability model', () => {
       }),
     ).resolves.toEqual({
       code: 'needs-action',
-      message: '无法连接当前 BofA 研报页面，请刷新当前页面后重试',
+      message: '无法连接当前原文页面，请刷新当前页面后重试',
       updatedAt: expect.any(String),
     });
 
